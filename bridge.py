@@ -68,8 +68,12 @@ def make_bridge_config(_bridge_rules):
     try:
         bridge_file = import_module(_bridge_rules)
         logger.info('Bridge configuration file found and imported')
-    except ImportError:
-        sys.exit('Bridge configuration file not found or invalid')
+    except ModuleNotFoundError:
+        logger.critical('Bridge rules module "%s" not found — pass the module name without .py (e.g. -b bridge_rules)', _bridge_rules)
+        sys.exit(1)
+    except Exception as e:
+        logger.critical('Error loading bridge rules module "%s": %s', _bridge_rules, e, exc_info=True)
+        sys.exit(1)
 
     for _bridge in bridge_file.BRIDGES:
         for _system in bridge_file.BRIDGES[_bridge]:
