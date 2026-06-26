@@ -41,7 +41,12 @@
   .empty{color:var(--muted);padding:10px;background:var(--panel);border-radius:8px;text-align:center}
   #log{background:#0b1220;border:1px solid var(--border);border-radius:8px;height:230px;overflow-y:auto;padding:8px 10px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;line-height:1.5}
   #log .start{color:#7dd3fc}#log .end{color:#86efac}#log .ts{color:#64748b}
-  .ka-ok{color:#4ade80}.ka-warn{color:var(--warn)}
+  /* slot pills */
+  .slotcol{width:230px}
+  .call{border-radius:6px;padding:6px 10px;font-size:12px;line-height:1.45;min-height:44px}
+  .call.idle{color:#475569;background:var(--panel2);border:1px solid transparent}
+  .call.rx{background:var(--green-bg);color:#86efac;border:1px solid var(--green)}
+  .call-top{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 </style>
 </head>
 <body>
@@ -69,7 +74,33 @@ function dur(secs){
   if(d) return d+'d '+h+'h'; if(h) return h+'h '+m+'m'; if(m) return m+'m '+s+'s'; return s+'s';
 }
 const idName = (name, id) => name ? esc(name)+' <span class="sub mono">('+id+')</span>' : '<span class="mono">'+esc(String(id||''))+'</span>';
-const ckey   = e => (e.system||'')+'|'+(e.ts||0)+'|'+(e.call_id||0);
+
+// one active call per system+timeslot (IPSC only allows one per TS)
+const ckey = e => (e.system||'')+'|'+(e.ts||0);
+
+// ---- slot pill helpers ----
+
+// Returns the active call on a specific system+ts if the source is peer_id, else null.
+function peerSlotActive(sys, peer_id, ts){
+  for(const k in ST.active){
+    const e = ST.active[k];
+    if(e.system===sys && e.ts===ts && String(e.peer)===String(peer_id)) return e;
+  }
+  return null;
+}
+
+
+function slotPill(e){
+  if(!e) return '<div class="call idle"><div class="call-top">— idle —</div><div class="sub mono">&nbsp;</div></div>';
+  const src  = e.src_alias  ? esc(e.src_alias)  : esc(String(e.src||''));
+  const tg   = e.tgid_alias ? esc(e.tgid_alias) : esc(String(e.tgid||''));
+  const secs = (Date.now()/1000) - (e._arrived||0);
+  const elapsed = '<span class="js-dur" data-start="'+esc(String(e._arrived||0))+'">'+dur(secs)+'</span>';
+  return '<div class="call rx">'
+       + '<div class="call-top">'+src+' → '+tg+'</div>'
+       + '<div class="sub mono">'+esc(String(e.peer||''))+' · '+elapsed+'</div>'
+       + '</div>';
+}
 
 // ---- renderers ----
 
@@ -78,51 +109,50 @@ function renderSystems(){
   if(!names.length){ el('systems').innerHTML='<div class="empty">No systems (dmrlink3 not connected or no IPSC networks enabled)</div>'; return; }
   let h='';
   for(const n of names){
-    const s = ST.systems[n];
+    const s    = ST.systems[n];
     const mode = s.MODE||'PEER';
-    const modeClass = mode==='MASTER'?'master':'peer';
-    h += '<h3><span class="sysname">'+esc(n)+'</span> <span class="pill '+modeClass+'">'+esc(mode)+'</span>'
+
+    h += '<h3><span class="sysname">'+esc(n)+'</span>'
+       + ' <span class="pill '+(mode==='MASTER'?'master':'peer')+'">'+esc(mode)+'</span>'
        + ' &nbsp;<span class="sub">Radio ID: '+esc(s.RADIO_ID)+'  |  '+esc(s.IP||'0.0.0.0')+':'+esc(s.PORT)+'</span></h3>';
 
-    // Master status row (when we are a peer)
+    // When we are a peer, show master connection status above the peer table
     if(mode === 'PEER'){
       const ms = s.MASTER||{};
-      const connected = ms.CONNECTED;
+      const ok = ms.CONNECTED;
       const rid = ms.RADIO_ID != null ? ms.RADIO_ID : '—';
-      h += '<table><tr><th>Role</th><th>Radio ID</th><th>Address</th><th>Status</th><th>KA Sent</th><th>KA Rcvd</th><th>KA Outstanding</th><th>KA Missed</th></tr>';
-      h += '<tr><td class="sub">Master</td><td class="mono">'+esc(rid)+'</td>'
-         + '<td class="mono">'+esc(ms.IP||'—')+':'+esc(ms.PORT||'—')+'</td>'
-         + '<td><span class="dot '+(connected?'ok':'bad')+'"></span><span class="'+(connected?'status-ok':'status-bad')+'">'+(connected?'Connected':'Disconnected')+'</span></td>'
-         + '<td class="mono">'+esc(ms.KEEP_ALIVES_SENT||0)+'</td>'
-         + '<td class="mono">'+esc(ms.KEEP_ALIVES_RECEIVED||0)+'</td>'
-         + '<td class="mono">'+esc(ms.KEEP_ALIVES_OUTSTANDING||0)+'</td>'
-         + '<td class="mono">'+esc(ms.KEEP_ALIVES_MISSED||0)+'</td>'
-         + '</tr></table>';
+      h += '<div class="sub" style="margin:-2px 0 8px">'
+         + 'Master: <span class="dot '+(ok?'ok':'bad')+'"></span>'
+         + '<span class="'+(ok?'status-ok':'status-bad')+'">'+(ok?'Connected':'Disconnected')+'</span>'
+         + ' — Radio ID '+esc(rid)+' @ '+esc(ms.IP||'—')+':'+esc(ms.PORT||'—')
+         + '</div>';
     }
 
-    // Peer list
+    // Peer table — identical columns for both MASTER and PEER mode systems
     const peers = s.PEERS||{};
     const pids  = Object.keys(peers);
-    h += '<h3 style="margin-top:6px">'+
-         (mode==='MASTER' ? 'Connected Peers ('+pids.length+')' : 'Peers in IPSC ('+pids.length+')')+'</h3>';
+    h += '<h3 style="margin-top:4px">'
+       + (mode==='MASTER' ? 'Connected Peers ('+pids.length+')' : 'Peers in IPSC ('+pids.length+')')
+       + '</h3>';
+
     if(!pids.length){
       h += '<div class="empty" style="margin-bottom:10px">No peers</div>';
     } else {
-      h += '<table><tr><th>Radio ID</th><th>Address</th><th>Status</th><th>KA Sent</th><th>KA Rcvd</th><th>KA Outstanding</th><th>KA Missed</th><th>Last KA</th></tr>';
+      h += '<table><tr><th>Radio ID</th><th>Address</th><th>Status</th>'
+         + '<th class="slotcol">TS1</th><th class="slotcol">TS2</th></tr>';
       for(const pid of pids){
-        const p = peers[pid];
-        const ps = p.STATUS||{};
-        const connected = ps.CONNECTED;
-        const lastKA = ps.KEEP_ALIVE_RX_TIME ? new Date(ps.KEEP_ALIVE_RX_TIME*1000).toLocaleTimeString() : '—';
+        const p    = peers[pid];
+        const ok   = (p.STATUS||{}).CONNECTED;
+        const rid   = p.RADIO_ID != null ? p.RADIO_ID : pid;
+        const pill1 = slotPill(peerSlotActive(n, rid, 1));
+        const pill2 = slotPill(peerSlotActive(n, rid, 2));
         h += '<tr>'
-           + '<td class="mono">'+esc(p.RADIO_ID||pid)+'</td>'
+           + '<td class="mono">'+esc(rid)+'</td>'
            + '<td class="mono">'+esc(p.IP)+':'+esc(p.PORT)+'</td>'
-           + '<td><span class="dot '+(connected?'ok':'bad')+'"></span><span class="'+(connected?'status-ok':'status-bad')+'">'+(connected?'Connected':'Disconnected')+'</span></td>'
-           + '<td class="mono">'+esc(ps.KEEP_ALIVES_SENT||0)+'</td>'
-           + '<td class="mono">'+esc(ps.KEEP_ALIVES_RECEIVED||0)+'</td>'
-           + '<td class="mono">'+esc(ps.KEEP_ALIVES_OUTSTANDING||0)+'</td>'
-           + '<td class="mono">'+esc(ps.KEEP_ALIVES_MISSED||0)+'</td>'
-           + '<td class="mono sub">'+lastKA+'</td>'
+           + '<td><span class="dot '+(ok?'ok':'bad')+'"></span>'
+           + '<span class="'+(ok?'status-ok':'status-bad')+'">'+(ok?'Connected':'Disconnected')+'</span></td>'
+           + '<td>'+pill1+'</td>'
+           + '<td>'+pill2+'</td>'
            + '</tr>';
       }
       h += '</table>';
@@ -173,15 +203,18 @@ function logRow(e){
 }
 function renderLog(){ el('log').innerHTML = ST.log.map(logRow).join(''); }
 
-// ---- live countdown tick ----
+// ---- ticker: countdown timers + slot pill elapsed ----
 setInterval(()=>{
   const now = Date.now();
   let reaped = false;
   for(const k in ST.active){ if(now - (ST.active[k]._arrived||0)*1000 > STALE){ delete ST.active[k]; reaped=true; } }
-  if(reaped) renderLog();
+  if(reaped){ renderSystems(); renderLog(); }
   document.querySelectorAll('.js-countdown').forEach(s=>{
     const r = (+s.dataset.rem) - (now - (+s.dataset.arr))/1000;
     s.textContent = r<=0?'expired':dur(r);
+  });
+  document.querySelectorAll('.js-dur').forEach(s=>{
+    s.textContent = dur(now/1000 - (+s.dataset.start||0));
   });
 }, 1000);
 
@@ -201,6 +234,7 @@ function applyBridgeEvent(data){
   else delete ST.active[ckey(data)];
   ST.log.unshift(data);
   if(ST.log.length > 400) ST.log.pop();
+  renderSystems();   // update slot pills
   renderLog();
 }
 
@@ -214,7 +248,7 @@ function connect(){
       ST.systems = m.systems||{};
       ST.bridges = m.bridges||{};
       ST.active  = {};
-      (m.active||[]).forEach(e => { ST.active[ckey(e)] = e; });
+      (m.active||[]).forEach(e => { e._arrived = e._arrived || (Date.now()/1000); ST.active[ckey(e)] = e; });
       ST.log = (m.log||[]);
       renderAll();
     }
