@@ -1,0 +1,3 @@
+dmr_utils3
+fastapi
+uvicorn[standard]

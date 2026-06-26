@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "dmrlink3"
+version = "3.0.0"
+description = "Python 3 / asyncio IPSC2 (Motorola DMR) network bridge and monitor"
+authors = [
+    {name = "Cortney T. Buffington, N0MJS", email = "n0mjs@me.com"},
+]
+license = {text = "GPLv3"}
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "dmr_utils3",
+    "fastapi",
+    "uvicorn[standard]",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["dmrlink3*", "dashboard*"]
