@@ -1,0 +1,33 @@
+# Live configuration files — not tracked so git pull never overwrites them
+dmrlink.cfg
+bridge_rules.py
+sub_acl.py
+dashboard/config.py
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environment
+venv/
+.venv/
+env/
+
+# ID alias files (downloaded at runtime)
+*.json
+*.csv
+
+# Logs
+*.log
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~

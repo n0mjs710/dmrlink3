@@ -5,7 +5,7 @@ build-backend = "setuptools.backends.legacy:build"
 [project]
 name = "dmrlink3"
 version = "3.0.0"
-description = "Python 3 / asyncio IPSC2 (Motorola DMR) network bridge and monitor"
+description = "Python 3 / asyncio Motorola MOTOTRBO IPSC (IP Site Connect) network bridge and monitor"
 authors = [
     {name = "Cortney T. Buffington, N0MJS", email = "n0mjs@me.com"},
 ]
