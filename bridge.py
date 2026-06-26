@@ -32,7 +32,7 @@ import signal
 import sys
 
 from binascii import b2a_hex as ahex
-from importlib import import_module
+from importlib.util import spec_from_file_location, module_from_spec
 from time import time
 
 from dmr_utils3.utils import bytes_3, bytes_4, int_id
@@ -64,15 +64,27 @@ BRIDGE_CONF = {}
 # Bridge rules loader
 # ---------------------------------------------------------------------------
 
+def _load_file_module(path, label):
+    """Load a Python file by path and return it as a module object."""
+    spec = spec_from_file_location(label, path)
+    if spec is None:
+        return None
+    mod = module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def make_bridge_config(_bridge_rules):
     try:
-        bridge_file = import_module(_bridge_rules)
+        bridge_file = _load_file_module(_bridge_rules, 'bridge_rules')
+        if bridge_file is None:
+            raise FileNotFoundError(_bridge_rules)
         logger.info('Bridge configuration file found and imported')
-    except ModuleNotFoundError:
-        logger.critical('Bridge rules module "%s" not found — pass the module name without .py (e.g. -b bridge_rules)', _bridge_rules)
+    except FileNotFoundError:
+        logger.critical('Bridge rules file "%s" not found', _bridge_rules)
         sys.exit(1)
     except Exception as e:
-        logger.critical('Error loading bridge rules module "%s": %s', _bridge_rules, e, exc_info=True)
+        logger.critical('Error loading bridge rules file "%s": %s', _bridge_rules, e, exc_info=True)
         sys.exit(1)
 
     for _bridge in bridge_file.BRIDGES:
@@ -105,7 +117,9 @@ def build_acl(_sub_acl):
     ACL = set()
     try:
         logger.info('ACL file found, importing entries. This will take about 1.5 seconds per 1 million IDs')
-        acl_file   = import_module(_sub_acl)
+        acl_file   = _load_file_module(_sub_acl, 'sub_acl')
+        if acl_file is None:
+            raise FileNotFoundError(_sub_acl)
         sections   = acl_file.ACL.split(':')
         ACL_ACTION = sections[0]
         for entry in sections[1].split(','):
@@ -116,8 +130,11 @@ def build_acl(_sub_acl):
             else:
                 ACL.add(bytes_3(int(entry)))
         logger.info('ACL loaded: action "%s" for %s radio IDs', ACL_ACTION, len(ACL))
-    except ImportError:
-        logger.info('ACL file not found or invalid - all subscriber IDs are valid')
+    except FileNotFoundError:
+        logger.info('ACL file "%s" not found — all subscriber IDs are valid', _sub_acl)
+        ACL_ACTION = 'NONE'
+    except Exception as e:
+        logger.warning('Error loading ACL file "%s": %s — all subscriber IDs are valid', _sub_acl, e)
         ACL_ACTION = 'NONE'
 
     global allow_sub
@@ -424,11 +441,11 @@ if __name__ == '__main__':
     parser.add_argument('-c', '--config',      action='store', dest='CFG_FILE',
                         help='/full/path/to/dmrlink.cfg')
     parser.add_argument('-b', '--bridge-rules', action='store', dest='BRIDGE_RULES',
-                        default='bridge_rules',
-                        help='bridge rules module name (default: bridge_rules)')
+                        default='bridge_rules.py',
+                        help='path to bridge rules file (default: bridge_rules.py)')
     parser.add_argument('-s', '--sub-acl',      action='store', dest='SUB_ACL',
-                        default='sub_acl',
-                        help='subscriber ACL module name (default: sub_acl)')
+                        default='sub_acl.py',
+                        help='path to subscriber ACL file (default: sub_acl.py)')
     parser.add_argument('-ll', '--log_level',   action='store', dest='LOG_LEVEL',
                         help='Override config file log level')
     parser.add_argument('-lh', '--log_handle',  action='store', dest='LOG_HANDLERS',
