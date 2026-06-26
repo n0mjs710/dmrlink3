@@ -31,7 +31,29 @@ from socket import inet_ntoa as IPAddr
 from socket import inet_aton as IPHexStr
 from time import time
 
-from const import *
+from const import (
+    ANY_PEER_REQUIRED, PEER_REQUIRED, MASTER_REQUIRED, USER_PACKETS,
+    GROUP_VOICE, PVT_VOICE, GROUP_DATA, PVT_DATA,
+    CALL_MON_STATUS, CALL_MON_RPT, REPEATER_BLOCKED, CALL_INTERRUPT_REQ,
+    XCMP_XNL, RPT_WAKE_UP,
+    DE_REG_REQ, DE_REG_REPLY,
+    MASTER_REG_REQ, MASTER_REG_REPLY,
+    PEER_LIST_REQ, PEER_LIST_REPLY,
+    PEER_REG_REQ, PEER_REG_REPLY,
+    MASTER_ALIVE_REQ, MASTER_ALIVE_REPLY,
+    PEER_ALIVE_REQ, PEER_ALIVE_REPLY,
+    SYSTEM_MAP_REQ, SYSTEM_MAP_REPLY, UNKNOWN_9E, WIRELINE,
+    REMOTE_PROG_REQ, REMOTE_PROG_REPLY, OPCODE_0xF0,
+    VOICE_HEAD, VOICE_TERM,
+    GV_BURST_TYPE_OFF, GV_CALL_INFO_OFF,
+    IPSC_VER,
+    PEER_OP_MSK, PEER_MODE_MSK, PEER_MODE_ANALOG, PEER_MODE_DIGITAL,
+    IPSC_TS1_MSK, IPSC_TS2_MSK,
+    CSBK_MSK, RPT_MON_MSK, CON_APP_MSK,
+    XNL_STAT_MSK, XNL_MSTR_MSK, XNL_SLAVE_MSK, PKT_AUTH_MSK,
+    DATA_CALL_MSK, VOICE_CALL_MSK, MSTR_PEER_MSK,
+    END_MSK, TS_CALL_MSK,
+)
 from dmr_utils3.utils import bytes_2, bytes_3, bytes_4, int_id, try_download, mk_id_dict
 
 __author__      = 'Cortney T. Buffington, N0MJS'
@@ -437,6 +459,11 @@ class IPSC(asyncio.DatagramProtocol):
                 return
             data = self.strip_hash(data)
 
+        # Master watchdog: any packet from a registered peer refreshes their keepalive timestamp,
+        # preventing false timeouts when keepalive packets are lost but voice/data is flowing.
+        if self._local['MASTER_PEER'] and len(data) >= 5 and _peerid in self._peers:
+            self._peers[_peerid]['STATUS']['KEEP_ALIVE_RX_TIME'] = int(time())
+
         if _packettype in ANY_PEER_REQUIRED:
             if not (self.valid_master(_peerid) or self.valid_peer(_peerid)):
                 logger.warning('(%s) PeerError: Peer not in peer-list: %s, %s:%s',
@@ -447,38 +474,51 @@ class IPSC(asyncio.DatagramProtocol):
                 _src_sub   = data[6:9]
                 _dst_sub   = data[9:12]
                 _call_info = data[17]
-                _ts        = (_call_info & TS_CALL_MSK) + 1
                 _end       = bool(_call_info & END_MSK)
 
                 if _packettype == GROUP_VOICE:
+                    # Timeslot detection: VOICE_HEAD/VOICE_TERM encode TS in call_info byte;
+                    # SLOT1/SLOT2_VOICE encode it in bit 7 of the burst_type byte instead.
+                    _burst_type = data[GV_BURST_TYPE_OFF]
+                    if _burst_type in (VOICE_HEAD, VOICE_TERM):
+                        _ts = 2 if (_call_info & TS_CALL_MSK) else 1
+                    else:
+                        _ts = 2 if (_burst_type & 0x80) else 1
                     self.reset_keep_alive(_peerid)
                     self.group_voice(_src_sub, _dst_sub, _ts, _end, _peerid, data)
-                elif _packettype == PVT_VOICE:
-                    self.reset_keep_alive(_peerid)
-                    self.private_voice(_src_sub, _dst_sub, _ts, _end, _peerid, data)
-                elif _packettype == GROUP_DATA:
-                    self.reset_keep_alive(_peerid)
-                    self.group_data(_src_sub, _dst_sub, _ts, _end, _peerid, data)
-                elif _packettype == PVT_DATA:
-                    self.reset_keep_alive(_peerid)
-                    self.private_data(_src_sub, _dst_sub, _ts, _end, _peerid, data)
+                else:
+                    _ts = 2 if (_call_info & TS_CALL_MSK) else 1
+                    if _packettype == PVT_VOICE:
+                        self.reset_keep_alive(_peerid)
+                        self.private_voice(_src_sub, _dst_sub, _ts, _end, _peerid, data)
+                    elif _packettype == GROUP_DATA:
+                        self.reset_keep_alive(_peerid)
+                        self.group_data(_src_sub, _dst_sub, _ts, _end, _peerid, data)
+                    elif _packettype == PVT_DATA:
+                        self.reset_keep_alive(_peerid)
+                        self.private_data(_src_sub, _dst_sub, _ts, _end, _peerid, data)
                 return
 
             elif _packettype == XCMP_XNL:
-                self.xcmp_xnl(data)
+                logger.debug('(%s) XCMP/XNL from %s:%s — ignored', self._system, host, port)
             elif _packettype == CALL_MON_STATUS:
                 self.call_mon_status(data)
             elif _packettype == CALL_MON_RPT:
                 self.call_mon_rpt(data)
-            elif _packettype == CALL_MON_NACK:
-                self.call_mon_nack(data)
+            elif _packettype == REPEATER_BLOCKED:
+                self.repeater_blocked(data)
+            elif _packettype == CALL_INTERRUPT_REQ:
+                logger.debug('(%s) CALL_INTERRUPT_REQ from %s:%s', self._system, host, port)
             elif _packettype == DE_REG_REQ:
+                self.send_packet(self.DE_REG_REPLY_PKT, (host, port))
                 self.de_register_peer(_peerid)
-                logger.warning('(%s) Peer De-Registration Request From: %s, %s:%s',
-                               self._system, int_id(_peerid), host, port)
+                if self._local['MASTER_PEER'] and self._peers:
+                    self.send_to_ipsc(self.PEER_LIST_REPLY_PKT + build_peer_list(self._peers))
+                logger.info('(%s) Peer De-Registration From: %s, %s:%s',
+                            self._system, int_id(_peerid), host, port)
             elif _packettype == DE_REG_REPLY:
-                logger.warning('(%s) Peer De-Registration Reply From: %s, %s:%s',
-                               self._system, int_id(_peerid), host, port)
+                logger.info('(%s) De-Registration Reply From: %s, %s:%s',
+                            self._system, int_id(_peerid), host, port)
             elif _packettype == RPT_WAKE_UP:
                 self.repeater_wake_up(data)
             return
@@ -516,7 +556,13 @@ class IPSC(asyncio.DatagramProtocol):
         elif _packettype == MASTER_ALIVE_REQ:
             self.master_alive_req(_peerid, host, port)
         elif _packettype == PEER_LIST_REQ:
-            self.peer_list_req(_peerid)
+            self.peer_list_req(_peerid, host, port)
+        elif _packettype == OPCODE_0xF0:
+            logger.debug('(%s) 0xF0 from %s:%s — benign, no response', self._system, host, port)
+        elif _packettype in (SYSTEM_MAP_REQ, SYSTEM_MAP_REPLY, UNKNOWN_9E,
+                             WIRELINE, REMOTE_PROG_REQ, REMOTE_PROG_REPLY):
+            logger.debug('(%s) Opcode %s from %s:%s — no handler',
+                         self._system, ahex(_packettype), host, port)
         else:
             self.unknown_message(_packettype, _peerid, data)
 
@@ -540,13 +586,8 @@ class IPSC(asyncio.DatagramProtocol):
         if self._rcm:
             self._report.send_rcm(self._system + ',' + _data.decode('latin-1'))
 
-    def call_mon_nack(self, _data):
-        logger.debug('(%s) Repeater Call Monitor NACK Packet Received', self._system)
-        if self._rcm:
-            self._report.send_rcm(self._system + ',' + _data.decode('latin-1'))
-
-    def xcmp_xnl(self, _data):
-        logger.debug('(%s) XCMP/XNL Packet Received', self._system)
+    def repeater_blocked(self, _data):
+        logger.debug('(%s) Repeater Blocked Packet Received', self._system)
 
     def repeater_wake_up(self, _data):
         logger.debug('(%s) Repeater Wake-Up Packet Received', self._system)
@@ -745,20 +786,20 @@ class IPSC(asyncio.DatagramProtocol):
         self._master['FLAGS_DECODE']        = process_flags_bytes(_hex_flags)
         self._master_stat['CONNECTED']      = True
         self._master_stat['KEEP_ALIVES_OUTSTANDING'] = 0
-        logger.warning('(%s) Registration response from Master: %s, %s:%s (%s peers)',
-                       self._system, int_id(_peerid),
-                       self._master['IP'], self._master['PORT'], self._local['NUM_PEERS'])
+        logger.info('(%s) Registration response from Master: %s, %s:%s (%s peers)',
+                    self._system, int_id(_peerid),
+                    self._master['IP'], self._master['PORT'], self._local['NUM_PEERS'])
+        # Request peer list immediately instead of waiting for the next maintenance loop tick
+        if self._local['NUM_PEERS']:
+            self.send_packet(self.PEER_LIST_REQ_PKT, self._master_sock)
+            logger.info('(%s) Requesting peer list from master', self._system)
 
     def master_reg_req(self, _data, _peerid, _host, _port):
-        _hex_mode     = _data[5:6]
-        _hex_flags    = _data[6:10]
-        self.MASTER_REG_REPLY_PKT = (MASTER_REG_REPLY + self._local_id + self.TS_FLAGS
-                                     + bytes_2(self._local['NUM_PEERS']) + IPSC_VER)
-        self.send_packet(self.MASTER_REG_REPLY_PKT, (_host, _port))
-        logger.info('(%s) Master Registration Packet Received from peer %s, %s:%s',
-                    self._system, int_id(_peerid), _host, _port)
+        _hex_mode  = _data[5:6]
+        _hex_flags = _data[6:10]
 
-        if _peerid not in self._peers:
+        is_new = _peerid not in self._peers
+        if is_new:
             self._peers[_peerid] = {
                 'IP':          _host,
                 'PORT':        _port,
@@ -775,9 +816,32 @@ class IPSC(asyncio.DatagramProtocol):
                     'KEEP_ALIVE_RX_TIME':      int(time()),
                 },
             }
+        else:
+            self._peers[_peerid].update({
+                'IP': _host, 'PORT': _port,
+                'MODE': _hex_mode, 'MODE_DECODE': process_mode_byte(_hex_mode),
+                'FLAGS': _hex_flags, 'FLAGS_DECODE': process_flags_bytes(_hex_flags),
+            })
+            self._peers[_peerid]['STATUS']['KEEP_ALIVE_RX_TIME'] = int(time())
+
         self._local['NUM_PEERS'] = len(self._peers)
-        logger.debug('(%s) Peer Added: %s, %s:%s (IPSC now has %s Peers)',
-                     self._system, int_id(_peerid), _host, _port, self._local['NUM_PEERS'])
+
+        reg_reply = MASTER_REG_REPLY + self._local_id + self.TS_FLAGS + bytes_2(self._local['NUM_PEERS']) + IPSC_VER
+        self.send_packet(reg_reply, (_host, _port))
+        # Push current peer list immediately; no need for peer to request it first
+        self.send_packet(self.PEER_LIST_REPLY_PKT + build_peer_list(self._peers), (_host, _port))
+
+        if is_new:
+            logger.info('(%s) Peer Registered: %s, %s:%s (IPSC now has %s peers)',
+                        self._system, int_id(_peerid), _host, _port, self._local['NUM_PEERS'])
+            # Push updated peer list to all existing registered peers
+            for existing_id, ep in list(self._peers.items()):
+                if existing_id != _peerid:
+                    self.send_packet(self.PEER_LIST_REPLY_PKT + build_peer_list(self._peers),
+                                     (ep['IP'], ep['PORT']))
+        else:
+            logger.info('(%s) Peer Re-Registered: %s, %s:%s',
+                        self._system, int_id(_peerid), _host, _port)
 
     def master_alive_req(self, _peerid, _host, _port):
         if _peerid in self._peers:
@@ -790,10 +854,10 @@ class IPSC(asyncio.DatagramProtocol):
             logger.warning('(%s) Master Keep-Alive from *UNREGISTERED* peer %s, %s:%s',
                            self._system, int_id(_peerid), _host, _port)
 
-    def peer_list_req(self, _peerid):
+    def peer_list_req(self, _peerid, _host, _port):
         if _peerid in self._peers:
             logger.debug('(%s) Peer List Request from peer %s', self._system, int_id(_peerid))
-            self.send_to_ipsc(self.PEER_LIST_REPLY_PKT + build_peer_list(self._peers))
+            self.send_packet(self.PEER_LIST_REPLY_PKT + build_peer_list(self._peers), (_host, _port))
         else:
             logger.warning('(%s) Peer List Request from *UNREGISTERED* peer %s',
                            self._system, int_id(_peerid))

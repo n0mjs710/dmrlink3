@@ -39,7 +39,7 @@ from dmr_utils3.utils import bytes_3, bytes_4, int_id
 
 from dmrlink import (IPSC, ReportServer, build_aliases, config_reports,
                      mk_ipsc_systems, run_periodic, systems)
-from const import BURST_DATA_TYPE
+from const import (GV_BURST_TYPE_OFF, VOICE_HEAD, VOICE_TERM, SLOT1_VOICE, SLOT2_VOICE)
 
 
 __author__      = 'Cortney T. Buffington, N0MJS'
@@ -216,8 +216,10 @@ class bridgeIPSC(IPSC):
                 'RX_SRC_SUB': b'\x00\x00\x00', 'TX_SRC_SUB': b'\x00\x00\x00'},
         }
 
-        self.last_seq_id = b'\x00'
-        self.call_start  = 0
+        # Per-TS call tracking. Talker Alias firmware churns the IPSC seq_id (byte 5)
+        # every superframe when alias data is interleaved, so seq_id is NOT a reliable
+        # call boundary. Use VOICE_HEAD/VOICE_TERM burst types instead.
+        self.call_start = {1: 0, 2: 0}
 
     def group_voice(self, _src_sub, _dst_group, _ts, _end, _peerid, _data):
         if not allow_sub(_src_sub):
@@ -225,8 +227,8 @@ class bridgeIPSC(IPSC):
                            self._system, int_id(_src_sub), int_id(_peerid), int_id(_dst_group))
             return
 
-        _burst_data_type = _data[30:31]
-        _seq_id          = _data[5:6]
+        _burst_data_type = _data[GV_BURST_TYPE_OFF]   # int; use VOICE_HEAD / SLOT1_VOICE etc.
+        _seq_id          = _data[5:6]                 # informational only — unreliable with TA
         now              = time()
 
         for _bridge in BRIDGES:
@@ -249,7 +251,7 @@ class bridgeIPSC(IPSC):
                         if _target['SYSTEM'] not in TRUNKS:
                             if ((_target['TGID'] != _target_status[_target['TS']]['RX_TGID']) and
                                     ((now - _target_status[_target['TS']]['RX_TIME']) < _target_system['LOCAL']['GROUP_HANGTIME'])):
-                                if _burst_data_type == BURST_DATA_TYPE['VOICE_HEAD']:
+                                if _burst_data_type == VOICE_HEAD:
                                     logger.info('(%s) Call not bridged to TGID %s, target in RX group hangtime: %s TS: %s TGID: %s',
                                                 self._system, int_id(_target['TGID']),
                                                 _target['SYSTEM'], _target['TS'],
@@ -257,7 +259,7 @@ class bridgeIPSC(IPSC):
                                 continue
                             if ((_target['TGID'] != _target_status[_target['TS']]['TX_TGID']) and
                                     ((now - _target_status[_target['TS']]['TX_TIME']) < _target_system['LOCAL']['GROUP_HANGTIME'])):
-                                if _burst_data_type == BURST_DATA_TYPE['VOICE_HEAD']:
+                                if _burst_data_type == VOICE_HEAD:
                                     logger.info('(%s) Call not bridged to TGID %s, target in TX group hangtime: %s TS: %s TGID: %s',
                                                 self._system, int_id(_target['TGID']),
                                                 _target['SYSTEM'], _target['TS'],
@@ -265,7 +267,7 @@ class bridgeIPSC(IPSC):
                                 continue
                             if ((_target['TGID'] == _target_status[_target['TS']]['RX_TGID']) and
                                     ((now - _target_status[_target['TS']]['RX_TIME']) < TS_CLEAR_TIME)):
-                                if _burst_data_type == BURST_DATA_TYPE['VOICE_HEAD']:
+                                if _burst_data_type == VOICE_HEAD:
                                     logger.info('(%s) Call not bridged to TGID %s, matching call active on target: %s TS: %s TGID: %s',
                                                 self._system, int_id(_target['TGID']),
                                                 _target['SYSTEM'], _target['TS'],
@@ -274,7 +276,7 @@ class bridgeIPSC(IPSC):
                             if ((_target['TGID'] == _target_status[_target['TS']]['TX_TGID']) and
                                     (_src_sub != _target_status[_target['TS']]['TX_SRC_SUB']) and
                                     ((now - _target_status[_target['TS']]['TX_TIME']) < TS_CLEAR_TIME)):
-                                if _burst_data_type == BURST_DATA_TYPE['VOICE_HEAD']:
+                                if _burst_data_type == VOICE_HEAD:
                                     logger.info('(%s) Call not bridged for sub %s, bridge in progress on target: %s TS: %s TGID: %s SUB: %s',
                                                 self._system, int_id(_src_sub),
                                                 _target['SYSTEM'], _target['TS'],
@@ -304,13 +306,9 @@ class bridgeIPSC(IPSC):
                         _tmp_data = _tmp_data[:17] + bytes([_call_info]) + _tmp_data[18:]
 
                         # Rewrite DMR timeslot in burst data
-                        if (_burst_data_type == BURST_DATA_TYPE['SLOT1_VOICE'] or
-                                _burst_data_type == BURST_DATA_TYPE['SLOT2_VOICE']):
-                            if _target['TS'] == 1:
-                                _burst_data_type = BURST_DATA_TYPE['SLOT1_VOICE']
-                            elif _target['TS'] == 2:
-                                _burst_data_type = BURST_DATA_TYPE['SLOT2_VOICE']
-                            _tmp_data = _tmp_data[:30] + _burst_data_type + _tmp_data[31:]
+                        if _burst_data_type in (SLOT1_VOICE, SLOT2_VOICE):
+                            _new_burst = SLOT1_VOICE if _target['TS'] == 1 else SLOT2_VOICE
+                            _tmp_data = _tmp_data[:30] + bytes([_new_burst]) + _tmp_data[31:]
 
                         systems[_target['SYSTEM']].send_to_ipsc(_tmp_data)
                         # END FRAME FORWARDING
@@ -324,35 +322,32 @@ class bridgeIPSC(IPSC):
         self.STATUS[_ts]['RX_TIME'] = now
 
         # BEGIN IN-BAND SIGNALING
-        if _burst_data_type == BURST_DATA_TYPE['VOICE_HEAD']:
-            if self.last_seq_id != _seq_id or (self.call_start + TS_CLEAR_TIME) < now:
-                self.last_seq_id = _seq_id
-                self.call_start  = now
-                logger.info('(%s) GROUP VOICE START: CallID: %s Peer: %s, Sub: %s, TS: %s, TGID: %s',
-                            self._system, int_id(_seq_id), int_id(_peerid),
-                            int_id(_src_sub), _ts, int_id(_dst_group))
+        if _burst_data_type == VOICE_HEAD:
+            if self.call_start[_ts] == 0 or (now - self.call_start[_ts]) > TS_CLEAR_TIME:
+                self.call_start[_ts] = now
+                logger.info('(%s) GROUP VOICE START: Peer: %s, Sub: %s, TS: %s, TGID: %s',
+                            self._system, int_id(_peerid), int_id(_src_sub), _ts, int_id(_dst_group))
                 if self._CONFIG['REPORTS']['REPORT_NETWORKS'] == 'NETWORK' and self._report:
                     self._report.send_bridge_event({
                         'event': 'GROUP VOICE START',
                         'system': self._system,
-                        'call_id': int_id(_seq_id),
                         'peer': int_id(_peerid),
                         'src': int_id(_src_sub),
                         'ts': _ts,
                         'tgid': int_id(_dst_group),
                     })
 
-        if _burst_data_type == BURST_DATA_TYPE['VOICE_TERM']:
-            if self.last_seq_id == _seq_id:
-                call_duration = now - self.call_start
-                logger.info('(%s) GROUP VOICE END: CallID: %s Peer: %s, Sub: %s, TS: %s, TGID: %s Duration: %.2fs',
-                            self._system, int_id(_seq_id), int_id(_peerid),
-                            int_id(_src_sub), _ts, int_id(_dst_group), call_duration)
+        if _burst_data_type == VOICE_TERM:
+            if self.call_start[_ts] > 0:
+                call_duration = now - self.call_start[_ts]
+                self.call_start[_ts] = 0
+                logger.info('(%s) GROUP VOICE END: Peer: %s, Sub: %s, TS: %s, TGID: %s Duration: %.2fs',
+                            self._system, int_id(_peerid), int_id(_src_sub), _ts, int_id(_dst_group),
+                            call_duration)
                 if self._CONFIG['REPORTS']['REPORT_NETWORKS'] == 'NETWORK' and self._report:
                     self._report.send_bridge_event({
                         'event': 'GROUP VOICE END',
                         'system': self._system,
-                        'call_id': int_id(_seq_id),
                         'peer': int_id(_peerid),
                         'src': int_id(_src_sub),
                         'ts': _ts,
@@ -360,14 +355,13 @@ class bridgeIPSC(IPSC):
                         'duration': round(call_duration, 2),
                     })
             else:
-                logger.warning('(%s) GROUP VOICE END WITHOUT MATCHING START: CallID: %s Peer: %s, Sub: %s, TS: %s, TGID: %s',
-                               self._system, int_id(_seq_id), int_id(_peerid),
+                logger.warning('(%s) GROUP VOICE END WITHOUT MATCHING START: Peer: %s, Sub: %s, TS: %s, TGID: %s',
+                               self._system, int_id(_peerid),
                                int_id(_src_sub), _ts, int_id(_dst_group))
                 if self._CONFIG['REPORTS']['REPORT_NETWORKS'] == 'NETWORK' and self._report:
                     self._report.send_bridge_event({
                         'event': 'GROUP VOICE UNMATCHED END',
                         'system': self._system,
-                        'call_id': int_id(_seq_id),
                         'peer': int_id(_peerid),
                         'src': int_id(_src_sub),
                         'ts': _ts,

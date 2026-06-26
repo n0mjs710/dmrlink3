@@ -25,14 +25,14 @@ CALL_CONFIRMATION     = b'\x05'
 TXT_MESSAGE_ACK       = b'\x54'
 CALL_MON_STATUS       = b'\x61'
 CALL_MON_RPT          = b'\x62'
-CALL_MON_NACK         = b'\x63'
+REPEATER_BLOCKED      = b'\x63'   # signal interference / BSI blocking event
 XCMP_XNL              = b'\x70'
 GROUP_VOICE           = b'\x80'
 PVT_VOICE             = b'\x81'
 GROUP_DATA            = b'\x83'
 PVT_DATA              = b'\x84'
 RPT_WAKE_UP           = b'\x85'
-UNKNOWN_COLLISION     = b'\x86'
+CALL_INTERRUPT_REQ    = b'\x86'   # call interrupt request
 MASTER_REG_REQ        = b'\x90'
 MASTER_REG_REPLY      = b'\x91'
 PEER_LIST_REQ         = b'\x92'
@@ -45,6 +45,13 @@ PEER_ALIVE_REQ        = b'\x98'
 PEER_ALIVE_REPLY      = b'\x99'
 DE_REG_REQ            = b'\x9A'
 DE_REG_REPLY          = b'\x9B'
+SYSTEM_MAP_REQ        = b'\x9C'   # system topology query; purpose not fully known
+SYSTEM_MAP_REPLY      = b'\x9D'
+UNKNOWN_9E            = b'\x9E'   # possibly extended peer registration
+WIRELINE              = b'\xB2'   # MNIS data sub-protocol
+REMOTE_PROG_REQ       = b'\xE0'   # CPS remote programming session request
+REMOTE_PROG_REPLY     = b'\xE1'
+OPCODE_0xF0           = b'\xF0'   # observed, benign, no response needed
 
 # IPSC Version Information
 IPSC_VER_14           = b'\x00'
@@ -58,19 +65,28 @@ IPSC_VER_22           = b'\x04'
 
 LINK_TYPE_IPSC        = b'\x04'
 
-BURST_DATA_TYPE = {
-    'VOICE_HEAD':  b'\x01',
-    'VOICE_TERM':  b'\x02',
-    'SLOT1_VOICE': b'\x0A',
-    'SLOT2_VOICE': b'\x8A',
-}
-
 # IPSC Version field used in registration packets
 IPSC_VER = LINK_TYPE_IPSC + IPSC_VER_17 + LINK_TYPE_IPSC + IPSC_VER_16
 
+# GROUP_VOICE burst type byte values (data[GV_BURST_TYPE_OFF] returns int in Python 3)
+VOICE_HEAD    = 0x01
+VOICE_TERM    = 0x02
+SLOT1_VOICE   = 0x0A
+SLOT2_VOICE   = 0x8A
+
+# GROUP_VOICE packet field offsets
+GV_CALL_INFO_OFF  = 17   # timeslot/end flags byte
+GV_RTP_TS_OFF     = 22   # 4-byte RTP timestamp (8 kHz clock, +480 per burst)
+GV_BURST_TYPE_OFF = 30   # burst type byte (see VOICE_HEAD / SLOT1_VOICE etc.)
+GV_BE_FLAG        = 0x16 # data[32] value that identifies a burst-E superframe
+GV_BE_LC_FLCO_OFF = 56   # FLCO field within burst-E embedded LC
+GV_MIN_LEN        = 33   # minimum valid GROUP_VOICE packet length
+FLCO_GROUP        = 0x00 # FLCO value for a group voice call (not Talker Alias)
+
 # Packet type membership lists
 ANY_PEER_REQUIRED = [GROUP_VOICE, PVT_VOICE, GROUP_DATA, PVT_DATA, CALL_MON_STATUS,
-                     CALL_MON_RPT, CALL_MON_NACK, XCMP_XNL, RPT_WAKE_UP, DE_REG_REQ]
+                     CALL_MON_RPT, REPEATER_BLOCKED, CALL_INTERRUPT_REQ, XCMP_XNL,
+                     RPT_WAKE_UP, DE_REG_REQ]
 PEER_REQUIRED     = [PEER_ALIVE_REQ, PEER_ALIVE_REPLY, PEER_REG_REQ, PEER_REG_REPLY]
 MASTER_REQUIRED   = [PEER_LIST_REPLY, MASTER_ALIVE_REPLY]
 USER_PACKETS      = [GROUP_VOICE, PVT_VOICE, GROUP_DATA, PVT_DATA]
@@ -109,7 +125,7 @@ DATA_CALL_MSK     = 0b00001000
 VOICE_CALL_MSK    = 0b00000100
 MSTR_PEER_MSK     = 0b00000001
 
-# TIMESLOT CALL & STATUS byte (byte 17 of voice/data packets)
+# TIMESLOT CALL & STATUS byte (GV_CALL_INFO_OFF = byte 17 of voice/data packets)
 #   .x.. ....  End flag (0=in-progress, 1=end)
 #   ..x. ....  Timeslot (0=TS1, 1=TS2)
 END_MSK           = 0b01000000
