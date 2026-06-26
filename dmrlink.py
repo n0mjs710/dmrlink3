@@ -163,6 +163,8 @@ class ReportServer:
             return
         logger.info('(GLOBAL) Reporting client connected: %s:%s', addr[0], addr[1])
         self.clients.append(writer)
+        self.send_config()   # push current state immediately; don't wait for the next periodic tick
+        self.send_bridge()   # no-op in base class; BridgeReportServer overrides this
         try:
             while True:
                 data = await reader.read(256)
