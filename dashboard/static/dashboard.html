@@ -132,7 +132,7 @@ function renderSystems(){
     const peers = s.PEERS||{};
     const pids  = Object.keys(peers);
     h += '<h3 style="margin-top:4px">'
-       + (mode==='MASTER' ? 'Connected Peers ('+pids.length+')' : 'Peers in IPSC ('+pids.length+')')
+       + 'Peers in IPSC ('+pids.length+')'
        + '</h3>';
 
     if(!pids.length){
