@@ -120,11 +120,15 @@ class ReportServer:
 
     async def start(self, port):
         allowed = self._config['REPORTS']['REPORT_CLIENTS']
-        server = await asyncio.start_server(
-            lambda r, w: self._client_connected(r, w, allowed),
-            host='0.0.0.0',
-            port=port,
-        )
+        try:
+            server = await asyncio.start_server(
+                lambda r, w: self._client_connected(r, w, allowed),
+                host='0.0.0.0',
+                port=port,
+            )
+        except OSError as e:
+            logger.error('(GLOBAL) Reporting server could not bind port %s: %s', port, e)
+            return
         logger.info('(GLOBAL) DMRlink3 reporting server listening on port %s', port)
         async with server:
             await server.serve_forever()
@@ -413,7 +417,7 @@ class IPSC(asyncio.DatagramProtocol):
 
     def connection_made(self, transport):
         self.transport = transport
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         if not self._local['MASTER_PEER']:
             loop.create_task(run_periodic(
                 self._local['ALIVE_TIMER'], self.peer_maintenance_loop, self._system))
@@ -581,8 +585,12 @@ class IPSC(asyncio.DatagramProtocol):
         if _peerid in self._peers:
             del self._peers[_peerid]
             logger.info('(%s) Peer De-Registered: %s', self._system, int_id(_peerid))
+        elif self.valid_master(_peerid):
+            self._master_stat['CONNECTED'] = False
+            self._master_stat['PEER_LIST'] = False
+            logger.info('(%s) Master De-Registered: %s', self._system, int_id(_peerid))
         else:
-            logger.warning('(%s) De-Registration requested for unknown peer: %s',
+            logger.warning('(%s) De-Registration from unknown source: %s',
                            self._system, int_id(_peerid))
 
     def de_register_self(self):
