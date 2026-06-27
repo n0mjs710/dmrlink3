@@ -54,12 +54,17 @@
   .spill.rx{background:var(--green-bg);color:#86efac;border-color:var(--green)}
   .spill.tx{background:var(--orange-bg);color:#fb923c;border-color:var(--orange)}
   .spill.hang{background:#0d2137;color:#7dd3fc;border-color:#075985}
+  .brand{display:flex;align-items:center;gap:14px}
+  .brand .logo{height:46px;width:auto;display:block}
 </style>
 </head>
 <body>
 <div class="wrap">
   <header>
-    <h1>{{REPORT_NAME}}<small>DMRlink3 Monitor</small></h1>
+    <div class="brand">
+      {{LOGO_HTML}}
+      <h1>{{REPORT_NAME}}<small>DMRlink3 Monitor</small></h1>
+    </div>
     <div id="conn" class="badge down">DMRlink3: connecting…</div>
   </header>
 

@@ -264,6 +264,18 @@ def build_aliases(_config):
     if peer_ids:
         logger.info('ID ALIAS MAPPER: peer_ids dictionary is available')
 
+    local_peer_path = _config['ALIASES']['PATH'] + 'local_peer_ids.json'
+    try:
+        with open(local_peer_path, 'r') as _f:
+            local_peer_ids = json.load(_f)
+        count = 0
+        for _id, _call in local_peer_ids.items():
+            peer_ids[int(_id)] = _call
+            count += 1
+        logger.info('ID ALIAS MAPPER: local_peer_ids.json merged %d entries into peer_ids', count)
+    except FileNotFoundError:
+        pass
+
     subscriber_ids = mk_id_dict(_config['ALIASES']['PATH'], _config['ALIASES']['SUBSCRIBER_FILE'])
     if subscriber_ids:
         logger.info('ID ALIAS MAPPER: subscriber_ids dictionary is available')

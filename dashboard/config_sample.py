@@ -11,6 +11,7 @@
 
 # Display / branding
 REPORT_NAME     = 'My DMRlink3 System'  # Shown in the dashboard header
+LOGO_FILE       = ''                    # Path to a logo image (png/jpg/svg/gif); '' = no logo
 
 # Connection to dmrlink3's reporting feed ([REPORTS] in dmrlink.cfg)
 DMRLINK_IP      = '127.0.0.1'           # dmrlink3 reporting host
