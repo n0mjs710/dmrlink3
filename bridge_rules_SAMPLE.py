@@ -19,17 +19,33 @@ Each system entry under a bridge has the following keys:
     TS      - Timeslot to match (1 or 2)
     TGID    - Integer talkgroup ID to match on that timeslot
     ACTIVE  - Initial state: True = bridging active, False = bridging off
+              Note: if TO_TYPE is 'ON', the entry starts a TIMEOUT-minute
+              countdown immediately on load. It will deactivate after TIMEOUT
+              minutes unless a call on an ON tgid resets the timer. Use
+              TO_TYPE 'NONE' for entries that should stay active indefinitely.
     TIMEOUT - Timer duration in MINUTES (used with TO_TYPE ON or OFF)
     TO_TYPE - Timer behavior:
-                'ON'   - When activated, deactivate after TIMEOUT minutes
+                'ON'   - When activated, deactivate after TIMEOUT minutes of
+                         inactivity (timer resets on each ON-trigger key-down)
                 'OFF'  - When deactivated, reactivate after TIMEOUT minutes
                 'NONE' - No timer; state only changes via ON/OFF triggers
-    ON      - List of TGIDs that activate this entry (PTT on one of these
-              talkgroups keys the bridge on)
-    OFF     - List of TGIDs that deactivate this entry
+    ON      - List of TGIDs that activate this entry. Activation fires on
+              key-down (VOICE_HEAD) so the bridge is active for the entire
+              call including the first packet.
+    OFF     - List of TGIDs that deactivate this entry. Deactivation also
+              fires on key-down so the bridge goes inactive immediately when
+              someone keys up on an OFF tgid, without waiting for unkey.
     RESET   - List of TGIDs that reset a running ON-type timer without
               changing active state. Useful when voice traffic arrives on a
               different TGID than the trigger.
+
+IMPORTANT — PER-SYSTEM ACTIVATION:
+Each system entry manages its own ACTIVE state independently. When a system
+receives an ON or OFF trigger TGID, only that system's entry in the bridge
+changes state. The other systems' entries change state only when those systems
+themselves receive the trigger. This means all entries that should participate
+in a bridge typically start with ACTIVE: True so that traffic flows from the
+moment the bridge loads. Entries with TO_TYPE 'ON' then self-manage via timer.
 
 TRUNKS
 ------

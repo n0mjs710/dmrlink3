@@ -110,10 +110,18 @@ active system on the same bridge.
 
 **Key features:**
 - Per-bridge per-system timeslot and talkgroup matching
-- In-band activation/deactivation via TGID triggers (PTT on a designated TGID
-  keys a bridge on or off)
-- Optional timeouts: `TO_TYPE: ON` means the bridge deactivates after a timer;
-  `TO_TYPE: OFF` means it reactivates after a timer
+- In-band activation and deactivation via TGID triggers — both fire on
+  **key-down (VOICE_HEAD)**, so the bridge activates for the entire call
+  including its first packet, and deactivates the moment an OFF tgid is keyed
+  without waiting for unkey
+- Each system manages its own bridge entry independently; a trigger received
+  on one system activates only that system's entry
+- Optional timeouts: `TO_TYPE: ON` deactivates an entry after `TIMEOUT` minutes
+  of inactivity (timer resets on each ON-trigger key-down); `TO_TYPE: OFF`
+  reactivates an entry after `TIMEOUT` minutes
+- Entries that start `ACTIVE: True` with `TO_TYPE: ON` begin their timeout
+  countdown on load; use `TO_TYPE: NONE` for entries that should stay active
+  indefinitely without a timer
 - Contention handling: group-hangtime and timeslot-clear-time rules prevent
   simultaneous overlapping calls from being bridged destructively
 - Trunk bypass: systems listed in `TRUNKS` skip contention handling entirely —
@@ -139,6 +147,16 @@ REPORT_CLIENTS: 127.0.0.1
 The dashboard connects to this feed and serves a browser UI at the configured
 `WEB_PORT`. See `dashboard/config_sample.py` and [INSTALL.md](INSTALL.md) for
 setup instructions.
+
+**Dashboard features:**
+- Live IPSC system status: peer table with radio IDs, addresses, and connection state
+- Per-system **TS1/TS2 activity pills** showing real-time slot state:
+  - **RX** (green) — receiving a call from a peer, with source radio, peer ID, TGID, and elapsed time
+  - **TX** (orange) — forwarding a bridged call, with originating radio, source peer, TGID, and elapsed time
+  - **Hang** (blue) — slot recently freed but still in group-hangtime; shows TGID and countdown to when the slot is available
+  - **Idle** (gray) — slot is free
+- Conference bridge table with per-entry active/inactive state, configured timeout duration, live timer countdown, and trigger TGID lists; bridge state changes push to the dashboard immediately on activation or deactivation rather than waiting for the periodic refresh
+- Call log with timestamps, event type, system, timeslot, source radio, and TGID
 
 ---
 
