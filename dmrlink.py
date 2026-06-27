@@ -112,6 +112,7 @@ def _systems_snapshot(_systems):
                 'IP':                     master.get('IP', ''),
                 'PORT':                   master.get('PORT', ''),
                 'CONNECTED':              master['STATUS']['CONNECTED'],
+                'CONNECT_TIME':           master['STATUS']['CONNECT_TIME'],
                 'PEER_LIST':              master['STATUS']['PEER_LIST'],
                 'KEEP_ALIVES_SENT':       master['STATUS']['KEEP_ALIVES_SENT'],
                 'KEEP_ALIVES_RECEIVED':   master['STATUS']['KEEP_ALIVES_RECEIVED'],
@@ -124,6 +125,7 @@ def _systems_snapshot(_systems):
                     'IP':                      p['IP'],
                     'PORT':                    p['PORT'],
                     'CONNECTED':               p['STATUS']['CONNECTED'],
+                    'CONNECT_TIME':            p['STATUS']['CONNECT_TIME'],
                     'KEEP_ALIVES_SENT':        p['STATUS']['KEEP_ALIVES_SENT'],
                     'KEEP_ALIVES_RECEIVED':    p['STATUS']['KEEP_ALIVES_RECEIVED'],
                     'KEEP_ALIVES_OUTSTANDING': p['STATUS']['KEEP_ALIVES_OUTSTANDING'],
@@ -682,8 +684,9 @@ class IPSC(asyncio.DatagramProtocol):
             del self._peers[_peerid]
             logger.info('(%s) Peer De-Registered: %s', self._system, int_id(_peerid))
         elif self.valid_master(_peerid):
-            self._master_stat['CONNECTED'] = False
-            self._master_stat['PEER_LIST'] = False
+            self._master_stat['CONNECTED']    = False
+            self._master_stat['CONNECT_TIME'] = 0
+            self._master_stat['PEER_LIST']    = False
             logger.info('(%s) Master De-Registered: %s', self._system, int_id(_peerid))
         else:
             logger.warning('(%s) De-Registration from unknown source: %s',
@@ -728,6 +731,7 @@ class IPSC(asyncio.DatagramProtocol):
                     'FLAGS_DECODE':'',
                     'STATUS': {
                         'CONNECTED':               False,
+                        'CONNECT_TIME':            0,
                         'KEEP_ALIVES_SENT':        0,
                         'KEEP_ALIVES_MISSED':      0,
                         'KEEP_ALIVES_OUTSTANDING': 0,
@@ -844,7 +848,8 @@ class IPSC(asyncio.DatagramProtocol):
 
     def peer_reg_reply(self, _peerid):
         if _peerid in self._peers:
-            self._peers[_peerid]['STATUS']['CONNECTED'] = True
+            self._peers[_peerid]['STATUS']['CONNECTED']    = True
+            self._peers[_peerid]['STATUS']['CONNECT_TIME'] = int(time())
             logger.info('(%s) Registration Reply From: %s, %s:%s',
                         self._system, int_id(_peerid),
                         self._peers[_peerid]['IP'], self._peers[_peerid]['PORT'])
@@ -873,7 +878,8 @@ class IPSC(asyncio.DatagramProtocol):
         self._master['MODE_DECODE']         = process_mode_byte(_hex_mode)
         self._master['FLAGS']               = _hex_flags
         self._master['FLAGS_DECODE']        = process_flags_bytes(_hex_flags)
-        self._master_stat['CONNECTED']      = True
+        self._master_stat['CONNECTED']               = True
+        self._master_stat['CONNECT_TIME']            = int(time())
         self._master_stat['KEEP_ALIVES_OUTSTANDING'] = 0
         logger.info('(%s) Registration response from Master: %s, %s:%s (%s peers)',
                     self._system, int_id(_peerid),
@@ -898,6 +904,7 @@ class IPSC(asyncio.DatagramProtocol):
                 'FLAGS_DECODE':process_flags_bytes(_hex_flags),
                 'STATUS': {
                     'CONNECTED':               True,
+                    'CONNECT_TIME':            int(time()),
                     'KEEP_ALIVES_SENT':        0,
                     'KEEP_ALIVES_MISSED':      0,
                     'KEEP_ALIVES_OUTSTANDING': 0,
@@ -989,6 +996,7 @@ class IPSC(asyncio.DatagramProtocol):
 
             if self._master_stat['KEEP_ALIVES_OUTSTANDING'] >= self._local['MAX_MISSED']:
                 self._master_stat['CONNECTED']                = False
+                self._master_stat['CONNECT_TIME']             = 0
                 self._master_stat['KEEP_ALIVES_OUTSTANDING']  = 0
                 logger.error('(%s) Max Master Keep-Alives Missed — de-registering Master: %s:%s',
                              self._system, self._master['IP'], self._master['PORT'])
@@ -999,7 +1007,8 @@ class IPSC(asyncio.DatagramProtocol):
         else:
             logger.error('(%s) Master in UNKNOWN STATE: %s:%s',
                          self._system, self._master['IP'], self._master['PORT'])
-            self._master_stat['CONNECTED'] = False
+            self._master_stat['CONNECTED']    = False
+            self._master_stat['CONNECT_TIME'] = 0
 
         if self._master_stat['CONNECTED'] and not self._master_stat['PEER_LIST']:
             if self._local['NUM_PEERS']:

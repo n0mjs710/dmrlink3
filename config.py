@@ -133,6 +133,7 @@ def build_config(_config_file):
                     'FLAGS_DECODE': '',
                     'STATUS': {
                         'CONNECTED':               False,
+                        'CONNECT_TIME':            0,
                         'PEER_LIST':               False,
                         'KEEP_ALIVES_SENT':        0,
                         'KEEP_ALIVES_MISSED':      0,

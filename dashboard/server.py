@@ -114,6 +114,17 @@ def enrich_call(evt):
     evt['tgid_alias'] = alias(evt.get('tgid'), TALKGROUP_IDS)
     return evt
 
+def enrich_systems(systems):
+    now = time.time()
+    for sys in systems.values():
+        m = sys.get('MASTER', {})
+        ct = m.get('CONNECT_TIME', 0)
+        m['connected_secs'] = int(max(0, now - ct)) if ct else None
+        for p in sys.get('PEERS', {}).values():
+            ct = p.get('CONNECT_TIME', 0)
+            p['connected_secs'] = int(max(0, now - ct)) if ct else None
+    return systems
+
 def enrich_bridges(bridges):
     now = time.time()
     for members in bridges.values():
@@ -139,7 +150,7 @@ async def broadcast(obj):
 async def handle_event(evt):
     t = evt.get('type')
     if t == 'config':
-        STATE.systems = evt.get('systems', {})
+        STATE.systems = enrich_systems(evt.get('systems', {}))
         await broadcast({'type': 'config', 'systems': STATE.systems})
 
     elif t == 'bridge':

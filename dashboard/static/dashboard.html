@@ -168,9 +168,12 @@ function renderSystems(){
       if(ms){
         const mrid = ms.RADIO_ID != null ? ms.RADIO_ID : '—';
         const mok  = ms.CONNECTED;
+        const mUp  = mok && ms.connected_secs != null
+          ? '<div class="sub">up <span class="js-since" data-base="'+ms.connected_secs+'" data-arr="'+Date.now()+'">'+dur(ms.connected_secs)+'</span></div>'
+          : '';
         h += '<tr>'
            + '<td class="mono">'+esc(mrid)+'</td>'
-           + '<td class="mono">'+esc(ms.IP||'—')+':'+esc(ms.PORT||'—')+'</td>'
+           + '<td class="mono">'+esc(ms.IP||'—')+':'+esc(ms.PORT||'—')+mUp+'</td>'
            + '<td><span class="dot '+(mok?'ok':'bad')+'"></span>'
            + '<span class="'+(mok?'status-ok':'status-bad')+'">'+(mok?'Connected':'Disconnected')+'</span>'
            + ' <span class="pill master">master</span></td>'
@@ -180,7 +183,7 @@ function renderSystems(){
       const masterRid = ms ? ms.RADIO_ID : null;
       for(const pid of pids){
         const p        = peers[pid];
-        const p2p      = (p.STATUS||{}).CONNECTED;
+        const p2p      = p.CONNECTED;
         const rid      = p.RADIO_ID != null ? p.RADIO_ID : pid;
         // Self is shown in the system header; skip it from the peer membership table.
         if(String(rid) === String(s.RADIO_ID)) continue;
@@ -200,9 +203,12 @@ function renderSystems(){
           if(p2p) statusHtml += ' <span class="sub">P2P ✓</span>';
         }
 
+        const pUp = p.connected_secs != null
+          ? '<div class="sub">up <span class="js-since" data-base="'+p.connected_secs+'" data-arr="'+Date.now()+'">'+dur(p.connected_secs)+'</span></div>'
+          : '';
         h += '<tr>'
            + '<td class="mono">'+esc(rid)+'</td>'
-           + '<td class="mono">'+esc(p.IP)+':'+esc(p.PORT)+'</td>'
+           + '<td class="mono">'+esc(p.IP)+':'+esc(p.PORT)+pUp+'</td>'
            + '<td>'+statusHtml+'</td>'
            + '</tr>';
       }
@@ -270,6 +276,9 @@ setInterval(()=>{
   });
   document.querySelectorAll('.js-dur').forEach(s=>{
     s.textContent = dur(now/1000 - (+s.dataset.start||0));
+  });
+  document.querySelectorAll('.js-since').forEach(s=>{
+    s.textContent = dur((+s.dataset.base) + (now - (+s.dataset.arr))/1000);
   });
 }, 1000);
 
