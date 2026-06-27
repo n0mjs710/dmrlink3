@@ -252,14 +252,17 @@ class bridgeIPSC(IPSC):
         _seq_id          = _data[5:6]                 # informational only — unreliable with TA
         now              = time()
 
-        # ON triggers fire on key-down so the VOICE_HEAD itself gets bridged to newly-active targets.
+        # Both ON and OFF triggers fire on key-down (VOICE_HEAD) so the bridge state is
+        # current before the VOICE_HEAD itself is forwarded and before any unkey delay.
         if _burst_data_type == VOICE_HEAD:
             _bridge_changed = False
             for _bridge in BRIDGES:
                 for _system in BRIDGES[_bridge]:
                     if _system['SYSTEM'] != self._system:
                         continue
-                    if (_dst_group in _system['ON'] or _dst_group in _system['RESET']) and _ts == _system['TS']:
+                    if _ts != _system['TS']:
+                        continue
+                    if _dst_group in _system['ON'] or _dst_group in _system['RESET']:
                         if _dst_group in _system['ON'] and not _system['ACTIVE']:
                             _system['ACTIVE'] = True
                             _bridge_changed = True
@@ -270,6 +273,17 @@ class bridgeIPSC(IPSC):
                         if _system['ACTIVE'] and _system['TO_TYPE'] == 'ON':
                             _system['TIMER'] = now + _system['TIMEOUT']
                             logger.info('(%s) Bridge: %s ON-timer reset to %.0fs', self._system, _bridge, _system['TIMEOUT'])
+                    if _dst_group in _system['OFF'] or _dst_group in _system['RESET']:
+                        if _dst_group in _system['OFF'] and _system['ACTIVE']:
+                            _system['ACTIVE'] = False
+                            _bridge_changed = True
+                            logger.info('(%s) Bridge: %s deactivated', self._system, _bridge)
+                            if _system['TO_TYPE'] == 'ON':
+                                _system['TIMER'] = now
+                                logger.info('(%s) Bridge: %s ON-timer cancelled (deactivated by OFF trigger)', self._system, _bridge)
+                        if not _system['ACTIVE'] and _system['TO_TYPE'] == 'OFF':
+                            _system['TIMER'] = now + _system['TIMEOUT']
+                            logger.info('(%s) Bridge: %s OFF-timer reset to %.0fs', self._system, _bridge, _system['TIMEOUT'])
             if _bridge_changed and self._report:
                 self._report.send_bridge()
 
@@ -364,27 +378,6 @@ class bridgeIPSC(IPSC):
         self.STATUS[_ts]['RX_TGID'] = _dst_group
         self.STATUS[_ts]['RX_TIME'] = now
 
-        # OFF triggers fire on key-up.
-        if _burst_data_type == VOICE_TERM:
-            _bridge_changed = False
-            for _bridge in BRIDGES:
-                for _system in BRIDGES[_bridge]:
-                    if _system['SYSTEM'] != self._system:
-                        continue
-                    if (_dst_group in _system['OFF'] or _dst_group in _system['RESET']) and _ts == _system['TS']:
-                        if _dst_group in _system['OFF']:
-                            if _system['ACTIVE']:
-                                _system['ACTIVE'] = False
-                                _bridge_changed = True
-                                logger.info('(%s) Bridge: %s deactivated', self._system, _bridge)
-                                if _system['TO_TYPE'] == 'ON':
-                                    _system['TIMER'] = now
-                                    logger.info('(%s) Bridge: %s ON-timer cancelled (deactivated by OFF trigger)', self._system, _bridge)
-                        if not _system['ACTIVE'] and _system['TO_TYPE'] == 'OFF':
-                            _system['TIMER'] = now + _system['TIMEOUT']
-                            logger.info('(%s) Bridge: %s OFF-timer reset to %.0fs', self._system, _bridge, _system['TIMEOUT'])
-            if _bridge_changed and self._report:
-                self._report.send_bridge()
 
 
 # ---------------------------------------------------------------------------
