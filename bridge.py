@@ -96,11 +96,11 @@ def make_bridge_config(_bridge_rules):
                 sys.exit('ERROR: Conference bridge configured for system not found in main config')
 
             _system['TGID'] = bytes_3(_system['TGID'])
-            for i, e in enumerate(_system['ON']):
+            for i, _ in enumerate(_system['ON']):
                 _system['ON'][i] = bytes_3(_system['ON'][i])
-            for i, e in enumerate(_system['OFF']):
+            for i, _ in enumerate(_system['OFF']):
                 _system['OFF'][i] = bytes_3(_system['OFF'][i])
-            for i, e in enumerate(_system['RESET']):
+            for i, _ in enumerate(_system['RESET']):
                 _system['RESET'][i] = bytes_3(_system['RESET'][i])
             _system['TIMEOUT'] = _system['TIMEOUT'] * 60
             _system['TIMER']   = time() + _system['TIMEOUT']
@@ -256,7 +256,6 @@ class bridgeIPSC(IPSC):
         super().group_voice(_src_sub, _dst_group, _ts, _end, _peerid, _data)
 
         _burst_data_type = _data[GV_BURST_TYPE_OFF]   # int; use VOICE_HEAD / SLOT1_VOICE etc.
-        _seq_id          = _data[5:6]                 # informational only — unreliable with TA
         now              = time()
 
         # Both ON and OFF triggers fire on key-down (VOICE_HEAD) so the bridge state is
