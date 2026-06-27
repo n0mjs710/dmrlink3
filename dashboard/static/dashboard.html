@@ -225,7 +225,7 @@ function renderBridges(){
          + '<td class="mono">'+esc(m.TS)+'</td>'
          + '<td class="mono">'+idName(m.TGID_NAME, m.TGID)+'</td>'
          + '<td><span class="'+(on?'status-ok':'status-bad')+'">'+(on?'Active':'Inactive')+'</span></td>'
-         + '<td class="mono sub">'+(m.TO_TYPE!=='NONE'?dur(m.TIMEOUT):'<span class="sub">N/A</span>')+'</td>'
+         + '<td class="mono sub">'+(m.TO_TYPE!=='NONE'?Math.round(m.TIMEOUT/60)+'m':'<span class="sub">N/A</span>')+'</td>'
          + '<td>'+rem+'</td>'
          + '<td class="sub">'+act+'</td>'
          + '<td class="mono sub">'+(m.ON||[]).join(', ')+'</td>'
