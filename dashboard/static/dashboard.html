@@ -41,12 +41,18 @@
   .empty{color:var(--muted);padding:10px;background:var(--panel);border-radius:8px;text-align:center}
   #log{background:#0b1220;border:1px solid var(--border);border-radius:8px;height:230px;overflow-y:auto;padding:8px 10px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;line-height:1.5}
   #log .start{color:#7dd3fc}#log .end{color:#86efac}#log .ts{color:#64748b}
-  /* slot pills */
-  .slotcol{width:230px}
-  .call{border-radius:6px;padding:6px 10px;font-size:12px;line-height:1.45;min-height:44px}
-  .call.idle{color:#475569;background:var(--panel2);border:1px solid transparent}
-  .call.rx{background:var(--green-bg);color:#86efac;border:1px solid var(--green)}
-  .call-top{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  /* system-level TS activity pills */
+  .sys-hdr{margin:12px 0 4px}
+  .peers-hdr{display:flex;justify-content:space-between;align-items:center;margin:4px 0 6px}
+  .peers-hdr h3{margin:0}
+  .slot-pills{display:flex;gap:8px;flex-shrink:0;margin-left:16px}
+  .spill{width:280px;border-radius:6px;padding:5px 10px;font-size:12px;border:1px solid var(--border);box-sizing:border-box}
+  .spill-top{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.4}
+  .spill-bot{font-size:11px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.4;opacity:.85}
+  .spill.idle{color:var(--muted);background:var(--panel2)}
+  .spill.idle .spill-top{font-weight:400}
+  .spill.rx{background:var(--green-bg);color:#86efac;border-color:var(--green)}
+  .spill.tx{background:var(--orange-bg);color:#fb923c;border-color:var(--orange)}
 </style>
 </head>
 <body>
@@ -62,7 +68,7 @@
 </div>
 
 <script>
-const ST = { systems:{}, bridges:{}, active:{}, log:[], dmrlink:false };
+const ST = { systems:{}, bridges:{}, active:{}, tx_active:{}, log:[], dmrlink:false };
 const STALE = 60000;
 
 const el  = id => document.getElementById(id);
@@ -78,27 +84,35 @@ const idName = (name, id) => name ? esc(name)+' <span class="sub mono">('+id+')<
 // one active call per system+timeslot (IPSC only allows one per TS)
 const ckey = e => (e.system||'')+'|'+(e.ts||0);
 
-// ---- slot pill helpers ----
+// ---- system-level TS activity pills ----
 
-// Returns the active call on a specific system+ts if the source is peer_id, else null.
-function peerSlotActive(sys, peer_id, ts){
-  for(const k in ST.active){
-    const e = ST.active[k];
-    if(e.system===sys && e.ts===ts && String(e.peer)===String(peer_id)) return e;
+// Render one TS pill for a system: RX (receiving from a peer) or TX (forwarding to system) or idle.
+function sysTsPill(sys, ts){
+  const rx = ST.active[sys+'|'+ts];
+  const tx = ST.tx_active[sys+'|'+ts];
+  function espan(e){ const s=(Date.now()/1000)-(e._arrived||0); return '<span class="js-dur" data-start="'+esc(String(e._arrived||0))+'">'+dur(s)+'</span>'; }
+  function callType(e){ return (e.event||'').includes('GROUP') ? 'Voice' : 'Unit'; }
+  if(rx){
+    const src  = rx.src_alias  ? esc(rx.src_alias)  : esc(String(rx.src||''));
+    const peer = rx.peer_alias ? esc(rx.peer_alias) : esc(String(rx.peer||''));
+    const tg   = rx.tgid_alias ? esc(rx.tgid_alias) : esc(String(rx.tgid||''));
+    return '<div class="spill rx">'
+         + '<div class="spill-top">TS'+ts+' &nbsp;RX &nbsp;'+callType(rx)+' &nbsp;→ '+tg+'</div>'
+         + '<div class="spill-bot">'+src+' via '+peer+' · '+espan(rx)+'</div>'
+         + '</div>';
   }
-  return null;
-}
-
-
-function slotPill(e){
-  if(!e) return '<div class="call idle"><div class="call-top">— idle —</div><div class="sub mono">&nbsp;</div></div>';
-  const src  = e.src_alias  ? esc(e.src_alias)  : esc(String(e.src||''));
-  const tg   = e.tgid_alias ? esc(e.tgid_alias) : esc(String(e.tgid||''));
-  const secs = (Date.now()/1000) - (e._arrived||0);
-  const elapsed = '<span class="js-dur" data-start="'+esc(String(e._arrived||0))+'">'+dur(secs)+'</span>';
-  return '<div class="call rx">'
-       + '<div class="call-top">'+src+' → '+tg+'</div>'
-       + '<div class="sub mono">'+esc(String(e.peer||''))+' · '+elapsed+'</div>'
+  if(tx){
+    const src      = tx.src_alias       ? esc(tx.src_alias)       : esc(String(tx.src||''));
+    const src_peer = tx.src_peer_alias  ? esc(tx.src_peer_alias)  : esc(String(tx.src_peer||''));
+    const tg       = tx.tgid_alias      ? esc(tx.tgid_alias)      : esc(String(tx.tgid||''));
+    return '<div class="spill tx">'
+         + '<div class="spill-top">TS'+ts+' &nbsp;TX &nbsp;'+callType(tx)+' &nbsp;→ '+tg+'</div>'
+         + '<div class="spill-bot">'+src+' via '+src_peer+' · '+espan(tx)+'</div>'
+         + '</div>';
+  }
+  return '<div class="spill idle">'
+       + '<div class="spill-top">TS'+ts+'</div>'
+       + '<div class="spill-bot">&#8212; idle &#8212;</div>'
        + '</div>';
 }
 
@@ -112,47 +126,68 @@ function renderSystems(){
     const s    = ST.systems[n];
     const mode = s.MODE||'PEER';
 
-    h += '<h3><span class="sysname">'+esc(n)+'</span>'
+    h += '<div class="sys-hdr">'
+       + '<h3><span class="sysname">'+esc(n)+'</span>'
        + ' <span class="pill '+(mode==='MASTER'?'master':'peer')+'">'+esc(mode)+'</span>'
-       + ' &nbsp;<span class="sub">Radio ID: '+esc(s.RADIO_ID)+'  |  '+esc(s.IP||'0.0.0.0')+':'+esc(s.PORT)+'</span></h3>';
-
-    // When we are a peer, show master connection status above the peer table
-    if(mode === 'PEER'){
-      const ms = s.MASTER||{};
-      const ok = ms.CONNECTED;
-      const rid = ms.RADIO_ID != null ? ms.RADIO_ID : '—';
-      h += '<div class="sub" style="margin:-2px 0 8px">'
-         + 'Master: <span class="dot '+(ok?'ok':'bad')+'"></span>'
-         + '<span class="'+(ok?'status-ok':'status-bad')+'">'+(ok?'Connected':'Disconnected')+'</span>'
-         + ' — Radio ID '+esc(rid)+' @ '+esc(ms.IP||'—')+':'+esc(ms.PORT||'—')
-         + '</div>';
-    }
+       + ' &nbsp;<span class="sub">Radio ID: '+esc(s.RADIO_ID)+'  |  '+esc(s.IP||'0.0.0.0')+':'+esc(s.PORT)+'</span></h3>'
+       + '</div>';
 
     // Peer table — identical columns for both MASTER and PEER mode systems
     const peers = s.PEERS||{};
     const pids  = Object.keys(peers);
-    h += '<h3 style="margin-top:4px">'
-       + 'Peers in IPSC ('+pids.length+')'
-       + '</h3>';
+    const ms    = mode === 'PEER' ? (s.MASTER||{}) : null;
+    const totalCount = pids.length + (ms ? 1 : 0);
+    h += '<div class="peers-hdr">'
+       + '<h3>Peers in IPSC ('+totalCount+')</h3>'
+       + '<div class="slot-pills">'+sysTsPill(n,1)+sysTsPill(n,2)+'</div>'
+       + '</div>';
 
-    if(!pids.length){
+    if(!totalCount){
       h += '<div class="empty" style="margin-bottom:10px">No peers</div>';
     } else {
-      h += '<table><tr><th>Radio ID</th><th>Address</th><th>Status</th>'
-         + '<th class="slotcol">TS1</th><th class="slotcol">TS2</th></tr>';
+      h += '<table><tr><th>Radio ID</th><th>Address</th><th>Status</th></tr>';
+
+      // Inject master as first row when we are a PEER — the master does not
+      // include itself in the peer list it sends us, so we synthesise the row.
+      if(ms){
+        const mrid = ms.RADIO_ID != null ? ms.RADIO_ID : '—';
+        const mok  = ms.CONNECTED;
+        h += '<tr>'
+           + '<td class="mono">'+esc(mrid)+'</td>'
+           + '<td class="mono">'+esc(ms.IP||'—')+':'+esc(ms.PORT||'—')+'</td>'
+           + '<td><span class="dot '+(mok?'ok':'bad')+'"></span>'
+           + '<span class="'+(mok?'status-ok':'status-bad')+'">'+(mok?'Connected':'Disconnected')+'</span>'
+           + ' <span class="pill master">master</span></td>'
+           + '</tr>';
+      }
+
+      const masterRid = ms ? ms.RADIO_ID : null;
       for(const pid of pids){
-        const p    = peers[pid];
-        const ok   = (p.STATUS||{}).CONNECTED;
-        const rid   = p.RADIO_ID != null ? p.RADIO_ID : pid;
-        const pill1 = slotPill(peerSlotActive(n, rid, 1));
-        const pill2 = slotPill(peerSlotActive(n, rid, 2));
+        const p        = peers[pid];
+        const p2p      = (p.STATUS||{}).CONNECTED;
+        const rid      = p.RADIO_ID != null ? p.RADIO_ID : pid;
+        // Self is shown in the system header; skip it from the peer membership table.
+        if(String(rid) === String(s.RADIO_ID)) continue;
+        // Skip if master happens to also appear in the peer list (avoid duplicate row).
+        if(masterRid != null && String(rid) === String(masterRid)) continue;
+
+        // Status: MASTER-mode CONNECTED is reliable (peer registered directly with us).
+        // PEER-mode: presence in the peer list is the meaningful status; P2P keepalive
+        //   may not be supported by all endpoints, shown only as a secondary badge.
+        let statusHtml;
+        if(mode === 'MASTER'){
+          statusHtml = '<span class="dot '+(p2p?'ok':'bad')+'"></span>'
+                     + '<span class="'+(p2p?'status-ok':'status-bad')+'">'+(p2p?'Connected':'Disconnected')+'</span>';
+        } else {
+          statusHtml = '<span class="dot ok"></span>'
+                     + '<span class="status-ok">Connected</span>';
+          if(p2p) statusHtml += ' <span class="sub">P2P ✓</span>';
+        }
+
         h += '<tr>'
            + '<td class="mono">'+esc(rid)+'</td>'
            + '<td class="mono">'+esc(p.IP)+':'+esc(p.PORT)+'</td>'
-           + '<td><span class="dot '+(ok?'ok':'bad')+'"></span>'
-           + '<span class="'+(ok?'status-ok':'status-bad')+'">'+(ok?'Connected':'Disconnected')+'</span></td>'
-           + '<td>'+pill1+'</td>'
-           + '<td>'+pill2+'</td>'
+           + '<td>'+statusHtml+'</td>'
            + '</tr>';
       }
       h += '</table>';
@@ -207,7 +242,8 @@ function renderLog(){ el('log').innerHTML = ST.log.map(logRow).join(''); }
 setInterval(()=>{
   const now = Date.now();
   let reaped = false;
-  for(const k in ST.active){ if(now - (ST.active[k]._arrived||0)*1000 > STALE){ delete ST.active[k]; reaped=true; } }
+  for(const k in ST.active)   { if(now - (ST.active[k]._arrived||0)*1000    > STALE){ delete ST.active[k];    reaped=true; } }
+  for(const k in ST.tx_active){ if(now - (ST.tx_active[k]._arrived||0)*1000 > STALE){ delete ST.tx_active[k]; reaped=true; } }
   if(reaped){ renderSystems(); renderLog(); }
   document.querySelectorAll('.js-countdown').forEach(s=>{
     const r = (+s.dataset.rem) - (now - (+s.dataset.arr))/1000;
@@ -230,11 +266,13 @@ function renderAll(){ renderSystems(); renderBridges(); renderLog(); }
 function applyBridgeEvent(data){
   data._arrived = data._arrived || (Date.now()/1000);
   const ev = data.event||'';
-  if(ev.includes('START')) ST.active[ckey(data)] = data;
-  else delete ST.active[ckey(data)];
+  if     (ev==='GROUP VOICE START')    ST.active[ckey(data)]    = data;
+  else if(ev==='GROUP VOICE END')      delete ST.active[ckey(data)];
+  else if(ev==='GROUP VOICE TX START') ST.tx_active[ckey(data)] = data;
+  else if(ev==='GROUP VOICE TX END')   delete ST.tx_active[ckey(data)];
   ST.log.unshift(data);
   if(ST.log.length > 400) ST.log.pop();
-  renderSystems();   // update slot pills
+  renderSystems();
   renderLog();
 }
 
@@ -245,16 +283,17 @@ function connect(){
     const m = JSON.parse(ev.data);
     if(m.type==='initial'){
       setConn(m.dmrlink);
-      ST.systems = m.systems||{};
-      ST.bridges = m.bridges||{};
-      ST.active  = {};
+      ST.systems   = m.systems||{};
+      ST.bridges   = m.bridges||{};
+      ST.active    = {};
+      ST.tx_active = {};
       (m.active||[]).forEach(e => { e._arrived = e._arrived || (Date.now()/1000); ST.active[ckey(e)] = e; });
       ST.log = (m.log||[]);
       renderAll();
     }
     else if(m.type==='dmrlink'){
       setConn(m.connected);
-      if(!m.connected){ ST.systems={}; ST.bridges={}; ST.active={}; renderAll(); }
+      if(!m.connected){ ST.systems={}; ST.bridges={}; ST.active={}; ST.tx_active={}; renderAll(); }
     }
     else if(m.type==='config'){
       ST.systems = m.systems||{};

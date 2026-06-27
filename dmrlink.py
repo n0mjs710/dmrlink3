@@ -65,6 +65,9 @@ __email__       = 'n0mjs@me.com'
 
 logger = logging.getLogger(__name__)
 
+# Minimum gap between calls on the same TS — handles Talker Alias VOICE_HEAD churn
+TS_CLEAR_TIME = 0.2
+
 # Global systems dict (populated by mk_ipsc_systems)
 systems = {}
 
@@ -201,6 +204,9 @@ class ReportServer:
         self._send_json({'type': 'config', 'systems': _systems_snapshot(self._config['SYSTEMS'])})
 
     def send_bridge(self):
+        pass  # Overridden by BridgeReportServer in bridge.py
+
+    def send_bridge_event(self, _event):
         pass  # Overridden by BridgeReportServer in bridge.py
 
     def send_rcm(self, _data):
@@ -431,6 +437,9 @@ class IPSC(asyncio.DatagramProtocol):
         self.DE_REG_REQ_PKT         = DE_REG_REQ        + self._local_id
         self.DE_REG_REPLY_PKT       = DE_REG_REPLY      + self._local_id
 
+        self.rx_start = {1: 0, 2: 0}   # per-TS RX call start timestamp (VOICE_HEAD → VOICE_TERM)
+        self.tx_start = {1: 0, 2: 0}   # per-TS TX call start timestamp (forwarded HEAD → TERM)
+
         logger.info('(%s) IPSC Instance Created: %s, %s:%s',
                     self._system, int_id(self._local['RADIO_ID']),
                     self._local['IP'], self._local['PORT'])
@@ -597,6 +606,38 @@ class IPSC(asyncio.DatagramProtocol):
     def group_voice(self, _src_sub, _dst_sub, _ts, _end, _peerid, _data):
         logger.debug('(%s) Group Voice Packet: From %s, Peer %s, Dst %s',
                      self._system, int_id(_src_sub), int_id(_peerid), int_id(_dst_sub))
+        _burst_type = _data[GV_BURST_TYPE_OFF]
+        _now = time()
+        if _burst_type == VOICE_HEAD:
+            if self.rx_start[_ts] == 0 or (_now - self.rx_start[_ts]) > TS_CLEAR_TIME:
+                self.rx_start[_ts] = _now
+                logger.info('(%s) GROUP VOICE START: Peer: %s, Src: %s, TS: %s, TGID: %s',
+                            self._system, int_id(_peerid), int_id(_src_sub), _ts, int_id(_dst_sub))
+                if self._report:
+                    self._report.send_bridge_event({
+                        'event':  'GROUP VOICE START',
+                        'system': self._system,
+                        'peer':   int_id(_peerid),
+                        'src':    int_id(_src_sub),
+                        'ts':     _ts,
+                        'tgid':   int_id(_dst_sub),
+                    })
+        elif _burst_type == VOICE_TERM:
+            if self.rx_start[_ts] > 0:
+                _duration = _now - self.rx_start[_ts]
+                self.rx_start[_ts] = 0
+                logger.info('(%s) GROUP VOICE END: Peer: %s, Src: %s, TS: %s, TGID: %s Duration: %.2fs',
+                            self._system, int_id(_peerid), int_id(_src_sub), _ts, int_id(_dst_sub), _duration)
+                if self._report:
+                    self._report.send_bridge_event({
+                        'event':    'GROUP VOICE END',
+                        'system':   self._system,
+                        'peer':     int_id(_peerid),
+                        'src':      int_id(_src_sub),
+                        'ts':       _ts,
+                        'tgid':     int_id(_dst_sub),
+                        'duration': round(_duration, 2),
+                    })
 
     def private_voice(self, _src_sub, _dst_sub, _ts, _end, _peerid, _data):
         logger.debug('(%s) Private Voice Packet: From %s, Peer %s, Dst %s',
@@ -706,6 +747,40 @@ class IPSC(asyncio.DatagramProtocol):
         for peer in list(self._peers):
             if self._peers[peer]['STATUS']['CONNECTED']:
                 self.transport.sendto(_packet, (self._peers[peer]['IP'], self._peers[peer]['PORT']))
+
+    def transmit_group_voice(self, _src_sub, _dst_group, _ts, _burst_type, _data, _src_peer=None):
+        """Broadcast a GROUP_VOICE packet to all IPSC peers and track TX call state."""
+        _now = time()
+        if _burst_type == VOICE_HEAD:
+            if self.tx_start[_ts] == 0 or (_now - self.tx_start[_ts]) > TS_CLEAR_TIME:
+                self.tx_start[_ts] = _now
+                logger.info('(%s) GROUP VOICE TX START: TS: %s, TGID: %s, Src: %s, SrcPeer: %s',
+                            self._system, _ts, int_id(_dst_group),
+                            int_id(_src_sub), int_id(_src_peer) if _src_peer else '—')
+                if self._report:
+                    self._report.send_bridge_event({
+                        'event':    'GROUP VOICE TX START',
+                        'system':   self._system,
+                        'ts':       _ts,
+                        'tgid':     int_id(_dst_group),
+                        'src':      int_id(_src_sub),
+                        'src_peer': int_id(_src_peer) if _src_peer else None,
+                    })
+        elif _burst_type == VOICE_TERM:
+            if self.tx_start[_ts] > 0:
+                _duration = _now - self.tx_start[_ts]
+                self.tx_start[_ts] = 0
+                logger.info('(%s) GROUP VOICE TX END: TS: %s, TGID: %s Duration: %.2fs',
+                            self._system, _ts, int_id(_dst_group), _duration)
+                if self._report:
+                    self._report.send_bridge_event({
+                        'event':    'GROUP VOICE TX END',
+                        'system':   self._system,
+                        'ts':       _ts,
+                        'tgid':     int_id(_dst_group),
+                        'duration': round(_duration, 2),
+                    })
+        self.send_to_ipsc(_data)
 
     def hashed_packet(self, _key, _data):
         _hash = bhex(hmac_new(_key, _data, sha1).hexdigest()[:20])

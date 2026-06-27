@@ -37,7 +37,7 @@ from time import time
 
 from dmr_utils3.utils import bytes_3, bytes_4, int_id
 
-from dmrlink import (IPSC, ReportServer, build_aliases, config_reports,
+from dmrlink import (IPSC, ReportServer, TS_CLEAR_TIME, build_aliases, config_reports,
                      mk_ipsc_systems, run_periodic, systems)
 from const import (GV_BURST_TYPE_OFF, VOICE_HEAD, VOICE_TERM, SLOT1_VOICE, SLOT2_VOICE)
 
@@ -50,9 +50,6 @@ __maintainer__  = 'Cort Buffington, N0MJS'
 __email__       = 'n0mjs@me.com'
 
 logger = logging.getLogger(__name__)
-
-# Minimum time between different subscribers transmitting on the same TGID
-TS_CLEAR_TIME = .2
 
 # Bridge state; populated in async_main after rules file is loaded
 BRIDGES     = {}
@@ -100,7 +97,7 @@ def make_bridge_config(_bridge_rules):
             for i, e in enumerate(_system['RESET']):
                 _system['RESET'][i] = bytes_3(_system['RESET'][i])
             _system['TIMEOUT'] = _system['TIMEOUT'] * 60
-            _system['TIMER']   = time()
+            _system['TIMER']   = time() + _system['TIMEOUT']
 
     return {
         'BRIDGE_CONF': bridge_file.BRIDGE_CONF,
@@ -156,7 +153,7 @@ def build_acl(_sub_acl):
 # ---------------------------------------------------------------------------
 
 def rule_timer_loop():
-    logger.info('(ALL IPSC SYSTEMS) Rule timer loop')
+    logger.debug('(ALL IPSC SYSTEMS) Rule timer loop')
     _now = time()
 
     for _bridge in BRIDGES:
@@ -237,20 +234,34 @@ class bridgeIPSC(IPSC):
                 'RX_SRC_SUB': b'\x00\x00\x00', 'TX_SRC_SUB': b'\x00\x00\x00'},
         }
 
-        # Per-TS call tracking. Talker Alias firmware churns the IPSC seq_id (byte 5)
-        # every superframe when alias data is interleaved, so seq_id is NOT a reliable
-        # call boundary. Use VOICE_HEAD/VOICE_TERM burst types instead.
-        self.call_start = {1: 0, 2: 0}
 
     def group_voice(self, _src_sub, _dst_group, _ts, _end, _peerid, _data):
         if not allow_sub(_src_sub):
             logger.warning('(%s) Group Voice ***REJECTED BY ACL*** From: %s, Peer %s, Dst %s',
                            self._system, int_id(_src_sub), int_id(_peerid), int_id(_dst_group))
             return
+        super().group_voice(_src_sub, _dst_group, _ts, _end, _peerid, _data)
 
         _burst_data_type = _data[GV_BURST_TYPE_OFF]   # int; use VOICE_HEAD / SLOT1_VOICE etc.
         _seq_id          = _data[5:6]                 # informational only — unreliable with TA
         now              = time()
+
+        # ON triggers fire on key-down so the VOICE_HEAD itself gets bridged to newly-active targets.
+        if _burst_data_type == VOICE_HEAD:
+            for _bridge in BRIDGES:
+                for _system in BRIDGES[_bridge]:
+                    if _system['SYSTEM'] != self._system:
+                        continue
+                    if (_dst_group in _system['ON'] or _dst_group in _system['RESET']) and _ts == _system['TS']:
+                        if _dst_group in _system['ON'] and not _system['ACTIVE']:
+                            _system['ACTIVE'] = True
+                            logger.info('(%s) Bridge: %s activated', self._system, _bridge)
+                            if _system['TO_TYPE'] == 'OFF':
+                                _system['TIMER'] = now
+                                logger.info('(%s) Bridge: %s OFF-timer cancelled (activated by ON trigger)', self._system, _bridge)
+                        if _system['ACTIVE'] and _system['TO_TYPE'] == 'ON':
+                            _system['TIMER'] = now + _system['TIMEOUT']
+                            logger.info('(%s) Bridge: %s ON-timer reset to %.0fs', self._system, _bridge, _system['TIMEOUT'])
 
         for _bridge in BRIDGES:
             for _system in BRIDGES[_bridge]:
@@ -331,7 +342,8 @@ class bridgeIPSC(IPSC):
                             _new_burst = SLOT1_VOICE if _target['TS'] == 1 else SLOT2_VOICE
                             _tmp_data = _tmp_data[:30] + bytes([_new_burst]) + _tmp_data[31:]
 
-                        systems[_target['SYSTEM']].send_to_ipsc(_tmp_data)
+                        systems[_target['SYSTEM']].transmit_group_voice(
+                            _src_sub, _target['TGID'], _target['TS'], _burst_data_type, _tmp_data, _peerid)
                         # END FRAME FORWARDING
 
                         _target_status[_target['TS']]['TX_TGID']    = _target['TGID']
@@ -342,71 +354,12 @@ class bridgeIPSC(IPSC):
         self.STATUS[_ts]['RX_TGID'] = _dst_group
         self.STATUS[_ts]['RX_TIME'] = now
 
-        # BEGIN IN-BAND SIGNALING
-        if _burst_data_type == VOICE_HEAD:
-            if self.call_start[_ts] == 0 or (now - self.call_start[_ts]) > TS_CLEAR_TIME:
-                self.call_start[_ts] = now
-                logger.info('(%s) GROUP VOICE START: Peer: %s, Sub: %s, TS: %s, TGID: %s',
-                            self._system, int_id(_peerid), int_id(_src_sub), _ts, int_id(_dst_group))
-                if self._CONFIG['REPORTS']['REPORT_NETWORKS'] == 'NETWORK' and self._report:
-                    self._report.send_bridge_event({
-                        'event': 'GROUP VOICE START',
-                        'system': self._system,
-                        'peer': int_id(_peerid),
-                        'src': int_id(_src_sub),
-                        'ts': _ts,
-                        'tgid': int_id(_dst_group),
-                    })
-
+        # OFF triggers fire on key-up.
         if _burst_data_type == VOICE_TERM:
-            if self.call_start[_ts] > 0:
-                call_duration = now - self.call_start[_ts]
-                self.call_start[_ts] = 0
-                logger.info('(%s) GROUP VOICE END: Peer: %s, Sub: %s, TS: %s, TGID: %s Duration: %.2fs',
-                            self._system, int_id(_peerid), int_id(_src_sub), _ts, int_id(_dst_group),
-                            call_duration)
-                if self._CONFIG['REPORTS']['REPORT_NETWORKS'] == 'NETWORK' and self._report:
-                    self._report.send_bridge_event({
-                        'event': 'GROUP VOICE END',
-                        'system': self._system,
-                        'peer': int_id(_peerid),
-                        'src': int_id(_src_sub),
-                        'ts': _ts,
-                        'tgid': int_id(_dst_group),
-                        'duration': round(call_duration, 2),
-                    })
-            else:
-                logger.warning('(%s) GROUP VOICE END WITHOUT MATCHING START: Peer: %s, Sub: %s, TS: %s, TGID: %s',
-                               self._system, int_id(_peerid),
-                               int_id(_src_sub), _ts, int_id(_dst_group))
-                if self._CONFIG['REPORTS']['REPORT_NETWORKS'] == 'NETWORK' and self._report:
-                    self._report.send_bridge_event({
-                        'event': 'GROUP VOICE UNMATCHED END',
-                        'system': self._system,
-                        'peer': int_id(_peerid),
-                        'src': int_id(_src_sub),
-                        'ts': _ts,
-                        'tgid': int_id(_dst_group),
-                    })
-
-            # Iterate rules for in-band activation/deactivation
             for _bridge in BRIDGES:
                 for _system in BRIDGES[_bridge]:
                     if _system['SYSTEM'] != self._system:
                         continue
-
-                    if (_dst_group in _system['ON'] or _dst_group in _system['RESET']) and _ts == _system['TS']:
-                        if _dst_group in _system['ON']:
-                            if not _system['ACTIVE']:
-                                _system['ACTIVE'] = True
-                                logger.info('(%s) Bridge: %s activated', self._system, _bridge)
-                                if _system['TO_TYPE'] == 'OFF':
-                                    _system['TIMER'] = now
-                                    logger.info('(%s) Bridge: %s OFF-timer cancelled (activated by ON trigger)', self._system, _bridge)
-                        if _system['ACTIVE'] and _system['TO_TYPE'] == 'ON':
-                            _system['TIMER'] = now + _system['TIMEOUT']
-                            logger.info('(%s) Bridge: %s ON-timer reset to %.0fs', self._system, _bridge, _system['TIMEOUT'])
-
                     if (_dst_group in _system['OFF'] or _dst_group in _system['RESET']) and _ts == _system['TS']:
                         if _dst_group in _system['OFF']:
                             if _system['ACTIVE']:
@@ -418,10 +371,6 @@ class bridgeIPSC(IPSC):
                         if not _system['ACTIVE'] and _system['TO_TYPE'] == 'OFF':
                             _system['TIMER'] = now + _system['TIMEOUT']
                             logger.info('(%s) Bridge: %s OFF-timer reset to %.0fs', self._system, _bridge, _system['TIMEOUT'])
-                        if _system['ACTIVE'] and _system['TO_TYPE'] == 'ON' and _dst_group in _system['OFF']:
-                            _system['TIMER'] = now
-                            logger.info('(%s) Bridge: %s ON-timer cancelled (OFF trigger while active)', self._system, _bridge)
-        # END IN-BAND SIGNALING
 
 
 # ---------------------------------------------------------------------------

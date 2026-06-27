@@ -207,13 +207,15 @@ class TestPacketRewrite(BridgeBase):
 
 class TestCallBoundary(unittest.TestCase):
     """
-    bridgeIPSC tracks call start/end via VOICE_HEAD and VOICE_TERM burst types,
+    IPSC (base class) tracks call start/end via VOICE_HEAD and VOICE_TERM burst types,
     NOT via seq_id (which Talker Alias firmware churns every superframe).
+    rx_start[ts] is set on VOICE_HEAD and cleared on VOICE_TERM.
+    bridgeIPSC calls super().group_voice() so the base-class tracking fires.
     """
 
     def setUp(self):
         config = _make_two_system_config()
-        # No BRIDGES needed — we are only checking call_start tracking
+        # No BRIDGES needed — we are only checking rx_start tracking
         bridge.BRIDGES = {}
         bridge.TRUNKS  = []
         self.proto = bridge.bridgeIPSC('TEST-MASTER', config, None)
@@ -231,65 +233,63 @@ class TestCallBoundary(unittest.TestCase):
         self.proto.group_voice(src, dst, ts, False, EXT_ID_B, pkt)
 
     def test_voice_head_sets_call_start(self):
-        self.assertEqual(self.proto.call_start[1], 0)
+        self.assertEqual(self.proto.rx_start[1], 0)
         self._gv(VOICE_HEAD, 1)
-        self.assertGreater(self.proto.call_start[1], 0)
+        self.assertGreater(self.proto.rx_start[1], 0)
 
     def test_voice_term_clears_call_start(self):
         self._gv(VOICE_HEAD, 1)
         self._gv(VOICE_TERM, 1)
-        self.assertEqual(self.proto.call_start[1], 0)
+        self.assertEqual(self.proto.rx_start[1], 0)
 
     def test_per_ts_independent(self):
         self._gv(VOICE_HEAD, ts=1)
-        self.assertEqual(self.proto.call_start[2], 0, 'TS2 call_start should remain 0')
+        self.assertEqual(self.proto.rx_start[2], 0, 'TS2 rx_start should remain 0')
 
         self._gv(VOICE_TERM, ts=1)
-        self.assertEqual(self.proto.call_start[1], 0)
-        self.assertEqual(self.proto.call_start[2], 0)
+        self.assertEqual(self.proto.rx_start[1], 0)
+        self.assertEqual(self.proto.rx_start[2], 0)
 
     def test_ta_seq_id_churn_no_duplicate_call_start(self):
         """
         Talker Alias firmware sends a new IPSC seq_id every superframe but does NOT
         send duplicate VOICE_HEAD bursts. However, if two consecutive VOICE_HEAD arrive
-        (e.g., due to network quirks) within TS_CLEAR_TIME, call_start must NOT be reset.
+        (e.g., due to network quirks) within TS_CLEAR_TIME, rx_start must NOT be reset.
         """
         self._gv(VOICE_HEAD, 1)
-        first_start = self.proto.call_start[1]
+        first_start = self.proto.rx_start[1]
 
         sleep(0.01)   # 10 ms — well under TS_CLEAR_TIME (0.2 s)
         self._gv(VOICE_HEAD, 1)   # second HEAD within clear-time
-        second_start = self.proto.call_start[1]
+        second_start = self.proto.rx_start[1]
 
         self.assertEqual(first_start, second_start,
-                         'call_start must not reset for VOICE_HEAD within TS_CLEAR_TIME')
+                         'rx_start must not reset for VOICE_HEAD within TS_CLEAR_TIME')
 
     def test_voice_head_restarts_after_clear_time(self):
-        """A VOICE_HEAD arriving more than TS_CLEAR_TIME after call_start replaces it."""
-        import bridge as _b
-        orig_clear = _b.TS_CLEAR_TIME
-        _b.TS_CLEAR_TIME = 0.0   # zero clear-time for this test
+        """A VOICE_HEAD arriving more than TS_CLEAR_TIME after rx_start replaces it."""
+        orig_clear = dmrlink.TS_CLEAR_TIME
+        dmrlink.TS_CLEAR_TIME = 0.0   # zero clear-time for this test
         try:
             self._gv(VOICE_HEAD, 1)
-            first_start = self.proto.call_start[1]
+            first_start = self.proto.rx_start[1]
             sleep(0.01)
             self._gv(VOICE_HEAD, 1)
-            second_start = self.proto.call_start[1]
+            second_start = self.proto.rx_start[1]
             self.assertGreater(second_start, first_start,
-                               'call_start should update when TS_CLEAR_TIME has elapsed')
+                               'rx_start should update when TS_CLEAR_TIME has elapsed')
         finally:
-            _b.TS_CLEAR_TIME = orig_clear
+            dmrlink.TS_CLEAR_TIME = orig_clear
 
     def test_unmatched_voice_term_no_crash(self):
-        """A VOICE_TERM with no preceding VOICE_HEAD should log a warning but not crash."""
+        """A VOICE_TERM with no preceding VOICE_HEAD should not crash."""
         self._gv(VOICE_TERM, 1)   # must not raise
-        self.assertEqual(self.proto.call_start[1], 0)
+        self.assertEqual(self.proto.rx_start[1], 0)
 
     def test_ts2_call_tracking_independent_of_ts1(self):
         self._gv(VOICE_HEAD, ts=2)
-        self.assertEqual(self.proto.call_start[2], 0 - 0 + self.proto.call_start[2])  # just check it exists
-        self.assertGreater(self.proto.call_start[2], 0)
-        self.assertEqual(self.proto.call_start[1], 0)
+        self.assertGreater(self.proto.rx_start[2], 0)
+        self.assertEqual(self.proto.rx_start[1], 0)
 
 
 # ---------------------------------------------------------------------------
