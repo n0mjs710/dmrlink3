@@ -56,6 +56,8 @@ from const import (
 )
 from dmr_utils3.utils import bytes_2, bytes_3, bytes_4, int_id, try_download, mk_id_dict
 
+from config import acl_check
+
 __author__      = 'Cortney T. Buffington, N0MJS'
 __copyright__   = 'Copyright (c) 2013-2026 Cortney T. Buffington, N0MJS and the K0USY Group'
 __credits__     = 'Adam Fast, KC0YLK; Dave Kierzkowski, KD8EYF; Steve Zingman, N4IRS; Mike Zingman, N4IRR'
@@ -890,6 +892,11 @@ class IPSC(asyncio.DatagramProtocol):
             logger.info('(%s) Requesting peer list from master', self._system)
 
     def master_reg_req(self, _data, _peerid, _host, _port):
+        if not acl_check(_peerid, self._config['REG_ACL']):
+            logger.warning('(%s) Peer Registration ***REJECTED BY ACL***: %s %s:%s',
+                           self._system, int_id(_peerid), _host, _port)
+            return
+
         _hex_mode  = _data[5:6]
         _hex_flags = _data[6:10]
 

@@ -22,8 +22,6 @@
 #
 # bridge_rules.py defines IPSC network, timeslot, and TGID matching rules that
 # determine which voice calls are bridged between systems.
-#
-# The optional sub_acl.py defines subscriber ACL rules (PERMIT/DENY lists).
 
 import asyncio
 import json
@@ -37,6 +35,7 @@ from time import time
 
 from dmr_utils3.utils import bytes_3, bytes_4, int_id
 
+from config import acl_check, process_acls
 from dmrlink import (IPSC, ReportServer, TS_CLEAR_TIME, build_aliases, config_reports,
                      mk_ipsc_systems, run_periodic, systems)
 from const import (GV_BURST_TYPE_OFF, VOICE_HEAD, VOICE_TERM, SLOT1_VOICE, SLOT2_VOICE)
@@ -110,48 +109,6 @@ def make_bridge_config(_bridge_rules):
         'BRIDGES':     bridge_file.BRIDGES,
         'TRUNKS':      bridge_file.TRUNKS,
     }
-
-
-# ---------------------------------------------------------------------------
-# Subscriber ACL
-# ---------------------------------------------------------------------------
-
-def build_acl(_sub_acl):
-    ACL = set()
-    try:
-        logger.info('ACL file found, importing entries. This will take about 1.5 seconds per 1 million IDs')
-        acl_file   = _load_file_module(_sub_acl, 'sub_acl')
-        if acl_file is None:
-            raise FileNotFoundError(_sub_acl)
-        sections   = acl_file.ACL.split(':')
-        ACL_ACTION = sections[0]
-        for entry in sections[1].split(','):
-            if '-' in entry:
-                start, end = entry.split('-')
-                for rid in range(int(start), int(end) + 1):
-                    ACL.add(bytes_3(rid))
-            else:
-                ACL.add(bytes_3(int(entry)))
-        logger.info('ACL loaded: action "%s" for %s radio IDs', ACL_ACTION, len(ACL))
-    except FileNotFoundError:
-        logger.info('ACL file "%s" not found — all subscriber IDs are valid', _sub_acl)
-        ACL_ACTION = 'NONE'
-    except Exception as e:
-        logger.warning('Error loading ACL file "%s": %s — all subscriber IDs are valid', _sub_acl, e)
-        ACL_ACTION = 'NONE'
-
-    global allow_sub
-    if ACL_ACTION == 'PERMIT':
-        def allow_sub(_sub):
-            return _sub in ACL
-    elif ACL_ACTION == 'DENY':
-        def allow_sub(_sub):
-            return _sub not in ACL
-    else:
-        def allow_sub(_sub):
-            return True
-
-    return ACL
 
 
 # ---------------------------------------------------------------------------
@@ -249,7 +206,7 @@ class bridgeIPSC(IPSC):
 
 
     def group_voice(self, _src_sub, _dst_group, _ts, _end, _peerid, _data):
-        if not allow_sub(_src_sub):
+        if not acl_check(_src_sub, self._CONFIG['GLOBAL']['SUB_ACL']):
             logger.warning('(%s) Group Voice ***REJECTED BY ACL*** From: %s, Peer %s, Dst %s',
                            self._system, int_id(_src_sub), int_id(_peerid), int_id(_dst_group))
             return
@@ -405,9 +362,6 @@ if __name__ == '__main__':
     parser.add_argument('-b', '--bridge-rules', action='store', dest='BRIDGE_RULES',
                         default='bridge_rules.py',
                         help='path to bridge rules file (default: bridge_rules.py)')
-    parser.add_argument('-s', '--sub-acl',      action='store', dest='SUB_ACL',
-                        default='sub_acl.py',
-                        help='path to subscriber ACL file (default: sub_acl.py)')
     parser.add_argument('-ll', '--log_level',   action='store', dest='LOG_LEVEL',
                         help='Override config file log level')
     parser.add_argument('-lh', '--log_handle',  action='store', dest='LOG_HANDLERS',
@@ -449,12 +403,12 @@ if __name__ == '__main__':
 
         await mk_ipsc_systems(CONFIG, systems, bridgeIPSC, report_server)
 
+        process_acls(CONFIG)
+
         CONFIG_DICT = make_bridge_config(cli_args.BRIDGE_RULES)
         BRIDGE_CONF = CONFIG_DICT['BRIDGE_CONF']
         TRUNKS      = CONFIG_DICT['TRUNKS']
         BRIDGES     = CONFIG_DICT['BRIDGES']
-
-        build_acl(cli_args.SUB_ACL)
 
         loop.create_task(run_periodic(60, rule_timer_loop, 'rule_timer', report_server))
 

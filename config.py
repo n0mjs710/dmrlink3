@@ -18,15 +18,86 @@
 #   Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
 ###############################################################################
 
+import bisect
 import configparser
 import sys
 from socket import getaddrinfo, IPPROTO_UDP
+
+import const
+from dmr_utils3.utils import int_id
 
 __author__     = 'Cortney T. Buffington, N0MJS'
 __copyright__  = 'Copyright (c) 2016-2026 Cortney T. Buffington, N0MJS and the K0USY Group'
 __license__    = 'GNU GPLv3'
 __maintainer__ = 'Cort Buffington, N0MJS'
 __email__      = 'n0mjs@me.com'
+
+
+def merge_ranges(_ranges):
+    merged = []
+    for start, end in sorted(_ranges):
+        if merged and start <= merged[-1][1] + 1:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def acl_build(_acl, _max):
+    if not _acl:
+        return (True, frozenset(), (const.ID_MIN,), (_max,))
+
+    singles = set()
+    ranges = []
+    sections = _acl.split(':')
+
+    action = (sections[0] == 'PERMIT')
+
+    for entry in sections[1].split(','):
+        if entry == 'ALL':
+            ranges = [(const.ID_MIN, _max)]
+            singles = set()
+            break
+        elif '-' in entry:
+            start, end = entry.split('-')
+            start, end = int(start), int(end)
+            if (const.ID_MIN <= start <= _max) or (const.ID_MIN <= end <= _max):
+                ranges.append((start, end))
+            else:
+                sys.exit('ACL CREATION ERROR, VALUE OUT OF RANGE ({} - {}) IN RANGE-BASED ENTRY: {}'.format(
+                    const.ID_MIN, _max, entry))
+        else:
+            id = int(entry)
+            if const.ID_MIN <= id <= _max:
+                singles.add(id)
+            else:
+                sys.exit('ACL CREATION ERROR, VALUE OUT OF RANGE ({} - {}) IN SINGLE ID ENTRY: {}'.format(
+                    const.ID_MIN, _max, entry))
+
+    merged = merge_ranges(ranges)
+    starts = tuple(r[0] for r in merged)
+    ends   = tuple(r[1] for r in merged)
+    return (action, frozenset(singles), starts, ends)
+
+
+def acl_check(_id, _acl):
+    id = int_id(_id)
+    action, singles, starts, ends = _acl
+    if id in singles:
+        return action
+    i = bisect.bisect_right(starts, id) - 1
+    if i >= 0 and id <= ends[i]:
+        return action
+    return not action
+
+
+def process_acls(_config):
+    # Global subscriber ACL — gates propagation through the bridge
+    _config['GLOBAL']['SUB_ACL'] = acl_build(_config['GLOBAL']['SUB_ACL'], const.ID_MAX)
+    # Per-system registration ACL — only meaningful on master systems (MASTER_PEER: True)
+    for system in _config['SYSTEMS']:
+        _config['SYSTEMS'][system]['LOCAL']['REG_ACL'] = acl_build(
+            _config['SYSTEMS'][system]['LOCAL']['REG_ACL'], const.PEER_MAX)
 
 
 def get_address(_host):
@@ -60,7 +131,9 @@ def build_config(_config_file):
         for section in config.sections():
             if section == 'GLOBAL':
                 CONFIG['GLOBAL'].update({
-                    'PATH': config.get(section, 'PATH'),
+                    'PATH':    config.get(section, 'PATH'),
+                    'USE_ACL': config.get(section, 'USE_ACL'),
+                    'SUB_ACL': config.get(section, 'SUB_ACL'),
                 })
 
             elif section == 'REPORTS':
@@ -123,6 +196,7 @@ def build_config(_config_file):
                     'AUTH_KEY':     bytes.fromhex(config.get(section, 'AUTH_KEY').rjust(40, '0')),
                     'GROUP_HANGTIME': config.getint(section, 'GROUP_HANGTIME'),
                     'NUM_PEERS':    0,
+                    'REG_ACL':      config.get(section, 'REG_ACL', fallback='PERMIT:ALL'),
                 })
 
                 CONFIG['SYSTEMS'][section]['MASTER'].update({

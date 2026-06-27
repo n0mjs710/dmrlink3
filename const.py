@@ -94,6 +94,11 @@ USER_PACKETS      = [GROUP_VOICE, PVT_VOICE, GROUP_DATA, PVT_DATA]
 # RCM Timeslot constants
 TS = {b'\x00': '1', b'\x01': '2'}
 
+# DMR ID range constants (matches hblink3)
+ID_MIN    = 1
+ID_MAX    = 16776415
+PEER_MAX  = 4294967295
+
 
 # ---------------------------------------------------------------------------
 # IPSC Bitmasks (from ipsc_mask.py)
