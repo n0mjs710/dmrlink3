@@ -53,6 +53,7 @@
   .spill.idle .spill-top{font-weight:400}
   .spill.rx{background:var(--green-bg);color:#86efac;border-color:var(--green)}
   .spill.tx{background:var(--orange-bg);color:#fb923c;border-color:var(--orange)}
+  .spill.hang{background:#211a08;color:#fbbf24;border-color:#78460b}
 </style>
 </head>
 <body>
@@ -68,7 +69,7 @@
 </div>
 
 <script>
-const ST = { systems:{}, bridges:{}, active:{}, tx_active:{}, log:[], dmrlink:false };
+const ST = { systems:{}, bridges:{}, active:{}, tx_active:{}, hang:{}, log:[], dmrlink:false };
 const STALE = 60000;
 
 const el  = id => document.getElementById(id);
@@ -108,6 +109,16 @@ function sysTsPill(sys, ts){
     return '<div class="spill tx">'
          + '<div class="spill-top">TS'+ts+' &nbsp;TX &nbsp;'+callType(tx)+' &nbsp;→ '+tg+'</div>'
          + '<div class="spill-bot">'+src+' via '+src_peer+' · '+espan(tx)+'</div>'
+         + '</div>';
+  }
+  const hg = ST.hang[sys+'|'+ts];
+  if(hg){
+    const tg   = hg.tgid_alias ? esc(hg.tgid_alias) : esc(String(hg.tgid||''));
+    const nowS = Date.now()/1000;
+    const left = Math.max(0, hg._expires - nowS);
+    return '<div class="spill hang">'
+         + '<div class="spill-top">TS'+ts+' &nbsp;'+(hg._ht==='tx'?'TX':'RX')+' &nbsp;hang &nbsp;→ '+tg+'</div>'
+         + '<div class="spill-bot"><span class="js-countdown" data-rem="'+left.toFixed(1)+'" data-arr="'+Date.now()+'">'+dur(left)+'</span> remaining</div>'
          + '</div>';
   }
   return '<div class="spill idle">'
@@ -244,6 +255,7 @@ setInterval(()=>{
   let reaped = false;
   for(const k in ST.active)   { if(now - (ST.active[k]._arrived||0)*1000    > STALE){ delete ST.active[k];    reaped=true; } }
   for(const k in ST.tx_active){ if(now - (ST.tx_active[k]._arrived||0)*1000 > STALE){ delete ST.tx_active[k]; reaped=true; } }
+  for(const k in ST.hang)     { if(now/1000 > ST.hang[k]._expires)                  { delete ST.hang[k];      reaped=true; } }
   if(reaped){ renderSystems(); renderLog(); }
   document.querySelectorAll('.js-countdown').forEach(s=>{
     const r = (+s.dataset.rem) - (now - (+s.dataset.arr))/1000;
@@ -265,11 +277,22 @@ function renderAll(){ renderSystems(); renderBridges(); renderLog(); }
 
 function applyBridgeEvent(data){
   data._arrived = data._arrived || (Date.now()/1000);
-  const ev = data.event||'';
-  if     (ev==='GROUP VOICE START')    ST.active[ckey(data)]    = data;
-  else if(ev==='GROUP VOICE END')      delete ST.active[ckey(data)];
-  else if(ev==='GROUP VOICE TX START') ST.tx_active[ckey(data)] = data;
-  else if(ev==='GROUP VOICE TX END')   delete ST.tx_active[ckey(data)];
+  const ev  = data.event||'';
+  const key = ckey(data);
+  const ht  = (ST.systems[data.system]||{}).GROUP_HANGTIME||0;
+  if(ev==='GROUP VOICE START'){
+    delete ST.hang[key];
+    ST.active[key] = data;
+  } else if(ev==='GROUP VOICE END'){
+    delete ST.active[key];
+    if(ht>0) ST.hang[key] = Object.assign({}, data, {_ht:'rx', _expires: data._arrived+ht});
+  } else if(ev==='GROUP VOICE TX START'){
+    delete ST.hang[key];
+    ST.tx_active[key] = data;
+  } else if(ev==='GROUP VOICE TX END'){
+    delete ST.tx_active[key];
+    if(ht>0) ST.hang[key] = Object.assign({}, data, {_ht:'tx', _expires: data._arrived+ht});
+  }
   ST.log.unshift(data);
   if(ST.log.length > 400) ST.log.pop();
   renderSystems();
@@ -287,13 +310,14 @@ function connect(){
       ST.bridges   = m.bridges||{};
       ST.active    = {};
       ST.tx_active = {};
+      ST.hang      = {};
       (m.active||[]).forEach(e => { e._arrived = e._arrived || (Date.now()/1000); ST.active[ckey(e)] = e; });
       ST.log = (m.log||[]);
       renderAll();
     }
     else if(m.type==='dmrlink'){
       setConn(m.connected);
-      if(!m.connected){ ST.systems={}; ST.bridges={}; ST.active={}; ST.tx_active={}; renderAll(); }
+      if(!m.connected){ ST.systems={}; ST.bridges={}; ST.active={}; ST.tx_active={}; ST.hang={}; renderAll(); }
     }
     else if(m.type==='config'){
       ST.systems = m.systems||{};
