@@ -56,7 +56,7 @@ BRIDGES     = {}
 TRUNKS      = []
 BRIDGE_CONF = {}
 
-# Alias dicts; populated in async_main and refreshed daily
+# Alias dicts; populated on startup in async_main (dashboard owns downloads/refresh)
 peer_ids       = {}
 subscriber_ids = {}
 talkgroup_ids  = {}
@@ -448,11 +448,6 @@ if __name__ == '__main__':
         global peer_ids, subscriber_ids, talkgroup_ids, local_ids
         peer_ids, subscriber_ids, talkgroup_ids, local_ids = build_aliases(CONFIG)
 
-        def refresh_aliases():
-            global peer_ids, subscriber_ids, talkgroup_ids, local_ids
-            peer_ids, subscriber_ids, talkgroup_ids, local_ids = build_aliases(CONFIG)
-            logger.info('(ALIASES) alias dictionaries refreshed')
-
         await mk_ipsc_systems(CONFIG, systems, bridgeIPSC, report_server)
 
         CONFIG_DICT = make_bridge_config(cli_args.BRIDGE_RULES)
@@ -463,7 +458,6 @@ if __name__ == '__main__':
         build_acl(cli_args.SUB_ACL)
 
         loop.create_task(run_periodic(60, rule_timer_loop, 'rule_timer', report_server))
-        loop.create_task(run_periodic(86400, refresh_aliases, 'alias_refresh'))
 
         await stop_event.wait()
 
