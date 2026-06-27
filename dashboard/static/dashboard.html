@@ -210,9 +210,9 @@ function renderSystems(){
 function renderBridges(){
   const names = Object.keys(ST.bridges);
   if(!names.length){ el('bridges').innerHTML='<div class="empty">No bridge data (is bridge.py running?)</div>'; return; }
-  let h='<table><tr><th>System</th><th>TS</th><th>TGID</th><th>Status</th><th>Timer</th><th>Timeout Action</th><th>Activate TGIDs</th><th>Deactivate TGIDs</th></tr>';
+  let h='<table><tr><th>System</th><th>TS</th><th>TGID</th><th>Status</th><th>Timeout</th><th>Timer</th><th>Timeout Action</th><th>Activate TGIDs</th><th>Deactivate TGIDs</th></tr>';
   for(const b of names){
-    h += '<tr class="bridge-head"><td colspan="8">'+esc(b)+'</td></tr>';
+    h += '<tr class="bridge-head"><td colspan="9">'+esc(b)+'</td></tr>';
     for(const m of ST.bridges[b]){
       const on  = m.ACTIVE;
       const timerRunning = (m.TO_TYPE==='ON' && m.ACTIVE) || (m.TO_TYPE==='OFF' && !m.ACTIVE);
@@ -225,6 +225,7 @@ function renderBridges(){
          + '<td class="mono">'+esc(m.TS)+'</td>'
          + '<td class="mono">'+idName(m.TGID_NAME, m.TGID)+'</td>'
          + '<td><span class="'+(on?'status-ok':'status-bad')+'">'+(on?'Active':'Inactive')+'</span></td>'
+         + '<td class="mono sub">'+(m.TO_TYPE!=='NONE'?dur(m.TIMEOUT):'<span class="sub">N/A</span>')+'</td>'
          + '<td>'+rem+'</td>'
          + '<td class="sub">'+act+'</td>'
          + '<td class="mono sub">'+(m.ON||[]).join(', ')+'</td>'
