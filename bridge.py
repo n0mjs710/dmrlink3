@@ -152,9 +152,10 @@ def build_acl(_sub_acl):
 # Rule timer loop (runs every 60 seconds)
 # ---------------------------------------------------------------------------
 
-def rule_timer_loop():
+def rule_timer_loop(_report=None):
     logger.debug('(ALL IPSC SYSTEMS) Rule timer loop')
     _now = time()
+    _changed = False
 
     for _bridge in BRIDGES:
         for _system in BRIDGES[_bridge]:
@@ -162,6 +163,7 @@ def rule_timer_loop():
                 if _system['ACTIVE']:
                     if _system['TIMER'] < _now:
                         _system['ACTIVE'] = False
+                        _changed = True
                         logger.info('Bridge TIMEOUT: DEACTIVATE System: %s, Bridge: %s, TS: %s, TGID: %s',
                                     _system['SYSTEM'], _bridge, _system['TS'], int_id(_system['TGID']))
                     else:
@@ -175,6 +177,7 @@ def rule_timer_loop():
                 if not _system['ACTIVE']:
                     if _system['TIMER'] < _now:
                         _system['ACTIVE'] = True
+                        _changed = True
                         logger.info('Bridge TIMEOUT: ACTIVATE System: %s, Bridge: %s, TS: %s, TGID: %s',
                                     _system['SYSTEM'], _bridge, _system['TS'], int_id(_system['TGID']))
                     else:
@@ -187,6 +190,9 @@ def rule_timer_loop():
             else:
                 logger.debug('Bridge NO ACTION: System: %s, Bridge: %s, TS: %s, TGID: %s',
                              _system['SYSTEM'], _bridge, _system['TS'], int_id(_system['TGID']))
+
+    if _changed and _report:
+        _report.send_bridge()
 
 
 # ---------------------------------------------------------------------------
@@ -248,6 +254,7 @@ class bridgeIPSC(IPSC):
 
         # ON triggers fire on key-down so the VOICE_HEAD itself gets bridged to newly-active targets.
         if _burst_data_type == VOICE_HEAD:
+            _bridge_changed = False
             for _bridge in BRIDGES:
                 for _system in BRIDGES[_bridge]:
                     if _system['SYSTEM'] != self._system:
@@ -255,6 +262,7 @@ class bridgeIPSC(IPSC):
                     if (_dst_group in _system['ON'] or _dst_group in _system['RESET']) and _ts == _system['TS']:
                         if _dst_group in _system['ON'] and not _system['ACTIVE']:
                             _system['ACTIVE'] = True
+                            _bridge_changed = True
                             logger.info('(%s) Bridge: %s activated', self._system, _bridge)
                             if _system['TO_TYPE'] == 'OFF':
                                 _system['TIMER'] = now
@@ -262,6 +270,8 @@ class bridgeIPSC(IPSC):
                         if _system['ACTIVE'] and _system['TO_TYPE'] == 'ON':
                             _system['TIMER'] = now + _system['TIMEOUT']
                             logger.info('(%s) Bridge: %s ON-timer reset to %.0fs', self._system, _bridge, _system['TIMEOUT'])
+            if _bridge_changed and self._report:
+                self._report.send_bridge()
 
         for _bridge in BRIDGES:
             for _system in BRIDGES[_bridge]:
@@ -356,6 +366,7 @@ class bridgeIPSC(IPSC):
 
         # OFF triggers fire on key-up.
         if _burst_data_type == VOICE_TERM:
+            _bridge_changed = False
             for _bridge in BRIDGES:
                 for _system in BRIDGES[_bridge]:
                     if _system['SYSTEM'] != self._system:
@@ -364,6 +375,7 @@ class bridgeIPSC(IPSC):
                         if _dst_group in _system['OFF']:
                             if _system['ACTIVE']:
                                 _system['ACTIVE'] = False
+                                _bridge_changed = True
                                 logger.info('(%s) Bridge: %s deactivated', self._system, _bridge)
                                 if _system['TO_TYPE'] == 'ON':
                                     _system['TIMER'] = now
@@ -371,6 +383,8 @@ class bridgeIPSC(IPSC):
                         if not _system['ACTIVE'] and _system['TO_TYPE'] == 'OFF':
                             _system['TIMER'] = now + _system['TIMEOUT']
                             logger.info('(%s) Bridge: %s OFF-timer reset to %.0fs', self._system, _bridge, _system['TIMEOUT'])
+            if _bridge_changed and self._report:
+                self._report.send_bridge()
 
 
 # ---------------------------------------------------------------------------
@@ -440,7 +454,7 @@ if __name__ == '__main__':
 
         build_acl(cli_args.SUB_ACL)
 
-        loop.create_task(run_periodic(60, rule_timer_loop, 'rule_timer'))
+        loop.create_task(run_periodic(60, rule_timer_loop, 'rule_timer', report_server))
 
         await stop_event.wait()
 
