@@ -215,9 +215,10 @@ function renderBridges(){
     h += '<tr class="bridge-head"><td colspan="8">'+esc(b)+'</td></tr>';
     for(const m of ST.bridges[b]){
       const on  = m.ACTIVE;
-      const to  = m.TO_TYPE==='ON'||m.TO_TYPE==='OFF';
-      const rem = to ? '<span class="js-countdown mono" data-rem="'+(m.remaining==null?0:m.remaining)+'" data-arr="'+Date.now()+'">'+(m.remaining<=0?'expired':dur(m.remaining))+'</span>'
-                     : '<span class="sub">N/A</span>';
+      const timerRunning = (m.TO_TYPE==='ON' && m.ACTIVE) || (m.TO_TYPE==='OFF' && !m.ACTIVE);
+      const remS = timerRunning ? m.TIMER - Date.now()/1000 : null;
+      const rem  = remS!=null ? '<span class="js-countdown mono" data-rem="'+remS.toFixed(1)+'" data-arr="'+Date.now()+'">'+(remS<=0?'expired':dur(remS))+'</span>'
+                              : '<span class="sub">N/A</span>';
       const act = m.TO_TYPE==='ON'?'Disconnect after timer':m.TO_TYPE==='OFF'?'Reconnect after timer':'<span class="sub">None</span>';
       h += '<tr>'
          + '<td class="sysname">'+esc(m.SYSTEM)+'</td>'

@@ -213,6 +213,7 @@ class BridgeReportServer(ReportServer):
                     'ACTIVE':  entry['ACTIVE'],
                     'TO_TYPE': entry['TO_TYPE'],
                     'TIMEOUT': entry['TIMEOUT'],
+                    'TIMER':   entry['TIMER'],
                     'ON':      [int_id(t) for t in entry['ON']],
                     'OFF':     [int_id(t) for t in entry['OFF']],
                     'RESET':   [int_id(t) for t in entry['RESET']],
