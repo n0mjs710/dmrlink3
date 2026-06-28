@@ -170,6 +170,30 @@ def build_config(_config_file):
                 })
 
             elif config.getboolean(section, 'ENABLED'):
+                # TRUNK systems have a minimal config distinct from full IPSC systems.
+                if config.get(section, 'SYSTEM_TYPE', fallback='IPSC') == 'TRUNK':
+                    peer_ip   = get_address(config.get(section, 'PEER_IP'))
+                    peer_port = config.getint(section, 'PEER_PORT')
+                    CONFIG['SYSTEMS'][section] = {
+                        'SYSTEM_TYPE': 'TRUNK',
+                        'LOCAL': {
+                            'ENABLED':        True,
+                            'SYSTEM_TYPE':    'TRUNK',
+                            'RADIO_ID':       bytes.fromhex(format(int(config.get(section, 'RADIO_ID')), '08x')),
+                            'IP':             config.get(section, 'IP').strip(),
+                            'PORT':           config.getint(section, 'PORT'),
+                            'GROUP_HANGTIME': config.getint(section, 'GROUP_HANGTIME'),
+                        },
+                        'TRUNK': {
+                            'PEER_IP':   peer_ip,
+                            'PEER_PORT': peer_port,
+                            'PEER_SOCK': (peer_ip, peer_port),
+                        },
+                        'MASTER': {},
+                        'PEERS':  {},
+                    }
+                    continue
+
                 CONFIG['SYSTEMS'][section] = {'LOCAL': {}, 'MASTER': {}, 'PEERS': {}}
 
                 CONFIG['SYSTEMS'][section]['LOCAL'].update({

@@ -39,6 +39,7 @@ from config import acl_check, process_acls
 from dmrlink import (IPSC, ReportServer, TS_CLEAR_TIME, build_aliases, config_reports,
                      mk_ipsc_systems, run_periodic, systems)
 from const import (GV_BURST_TYPE_OFF, VOICE_HEAD, VOICE_TERM, SLOT1_VOICE, SLOT2_VOICE)
+from trunk import TRUNK
 
 
 __author__      = 'Cortney T. Buffington, N0MJS'
@@ -349,6 +350,172 @@ class bridgeIPSC(IPSC):
 
 
 # ---------------------------------------------------------------------------
+# Bridge-aware TRUNK subclass
+# ---------------------------------------------------------------------------
+
+class bridgeTRUNK(TRUNK):
+    """
+    Bridge-aware Trunk v2 system.
+
+    Extends TRUNK with the full bridge routing logic so that inbound trunk
+    packets are forwarded to other systems according to BRIDGES rules,
+    exactly as bridgeIPSC does for IPSC sources.
+
+    NOTE: The routing logic in group_voice() below is intentionally parallel
+    to bridgeIPSC.group_voice().  A future refactor should extract a shared
+    _route_group_voice() helper to eliminate the duplication.  For now the
+    logic is kept inline to avoid changing working bridgeIPSC code while
+    trunk v2 is being established.
+    """
+
+    def group_voice(self, _src_sub, _dst_group, _ts, _end, _peerid, _data):
+        if not acl_check(_src_sub, self._CONFIG['GLOBAL']['SUB_ACL']):
+            logger.warning('(%s) TRUNK Group Voice ***REJECTED BY ACL*** From: %s, Peer %s, Dst %s',
+                           self._system, int_id(_src_sub), int_id(_peerid), int_id(_dst_group))
+            return
+
+        _burst_data_type = _data[GV_BURST_TYPE_OFF]
+        now = time()
+
+        # Process ON/OFF/RESET bridge triggers on key-down so bridge state is
+        # current before this VOICE_HEAD is forwarded (same as bridgeIPSC).
+        if _burst_data_type == VOICE_HEAD:
+            _bridge_changed = False
+            for _bridge, _system in BRIDGE_BY_SYSTEM.get(self._system, ()):
+                if _ts != _system['TS']:
+                    continue
+                if _dst_group in _system['ON'] or _dst_group in _system['RESET']:
+                    if _dst_group in _system['ON'] and not _system['ACTIVE']:
+                        _system['ACTIVE'] = True
+                        _bridge_changed = True
+                        logger.info('(%s) Bridge: %s activated', self._system, _bridge)
+                        if _system['TO_TYPE'] == 'OFF':
+                            _system['TIMER'] = now
+                            logger.info('(%s) Bridge: %s OFF-timer cancelled (activated by ON trigger)',
+                                        self._system, _bridge)
+                    if _system['ACTIVE'] and _system['TO_TYPE'] == 'ON':
+                        _system['TIMER'] = now + _system['TIMEOUT']
+                        logger.info('(%s) Bridge: %s ON-timer reset to %.0fs',
+                                    self._system, _bridge, _system['TIMEOUT'])
+                if _dst_group in _system['OFF'] or _dst_group in _system['RESET']:
+                    if _dst_group in _system['OFF'] and _system['ACTIVE']:
+                        _system['ACTIVE'] = False
+                        _bridge_changed = True
+                        logger.info('(%s) Bridge: %s deactivated', self._system, _bridge)
+                        if _system['TO_TYPE'] == 'ON':
+                            _system['TIMER'] = now
+                            logger.info('(%s) Bridge: %s ON-timer cancelled (deactivated by OFF trigger)',
+                                        self._system, _bridge)
+                    if not _system['ACTIVE'] and _system['TO_TYPE'] == 'OFF':
+                        _system['TIMER'] = now + _system['TIMEOUT']
+                        logger.info('(%s) Bridge: %s OFF-timer reset to %.0fs',
+                                    self._system, _bridge, _system['TIMEOUT'])
+            if _bridge_changed and self._report:
+                self._report.send_bridge()
+
+        for _bridge, _system, _members in BRIDGE_SRC_INDEX.get((self._system, _ts, _dst_group), ()):
+            if not _system['ACTIVE']:
+                continue
+            for _target in _members:
+                if _target['SYSTEM'] == self._system:
+                    continue
+                if not _target['ACTIVE']:
+                    continue
+
+                _target_status = systems[_target['SYSTEM']].STATUS
+                _target_system = self._CONFIG['SYSTEMS'][_target['SYSTEM']]
+
+                # Contention handling (bypassed for trunk targets via TRUNKS list)
+                if _target['SYSTEM'] not in TRUNKS:
+                    if ((_target['TGID'] != _target_status[_target['TS']]['RX_TGID']) and
+                            ((now - _target_status[_target['TS']]['RX_TIME']) < _target_system['LOCAL']['GROUP_HANGTIME'])):
+                        if _burst_data_type == VOICE_HEAD:
+                            logger.info('(%s) Call not bridged to TGID %s, target in RX group hangtime: %s TS: %s TGID: %s',
+                                        self._system, int_id(_target['TGID']),
+                                        _target['SYSTEM'], _target['TS'],
+                                        int_id(_target_status[_target['TS']]['RX_TGID']))
+                        continue
+                    if ((_target['TGID'] != _target_status[_target['TS']]['TX_TGID']) and
+                            ((now - _target_status[_target['TS']]['TX_TIME']) < _target_system['LOCAL']['GROUP_HANGTIME'])):
+                        if _burst_data_type == VOICE_HEAD:
+                            logger.info('(%s) Call not bridged to TGID %s, target in TX group hangtime: %s TS: %s TGID: %s',
+                                        self._system, int_id(_target['TGID']),
+                                        _target['SYSTEM'], _target['TS'],
+                                        int_id(_target_status[_target['TS']]['TX_TGID']))
+                        continue
+                    if ((_target['TGID'] == _target_status[_target['TS']]['RX_TGID']) and
+                            ((now - _target_status[_target['TS']]['RX_TIME']) < TS_CLEAR_TIME)):
+                        if _burst_data_type == VOICE_HEAD:
+                            logger.info('(%s) Call not bridged to TGID %s, matching call active on target: %s TS: %s TGID: %s',
+                                        self._system, int_id(_target['TGID']),
+                                        _target['SYSTEM'], _target['TS'],
+                                        int_id(_target_status[_target['TS']]['RX_TGID']))
+                        continue
+                    if ((_target['TGID'] == _target_status[_target['TS']]['TX_TGID']) and
+                            (_src_sub != _target_status[_target['TS']]['TX_SRC_SUB']) and
+                            ((now - _target_status[_target['TS']]['TX_TIME']) < TS_CLEAR_TIME)):
+                        if _burst_data_type == VOICE_HEAD:
+                            logger.info('(%s) Call not bridged for sub %s, bridge in progress on target: %s TS: %s TGID: %s SUB: %s',
+                                        self._system, int_id(_src_sub),
+                                        _target['SYSTEM'], _target['TS'],
+                                        int_id(_target_status[_target['TS']]['TX_TGID']),
+                                        int_id(_target_status[_target['TS']]['TX_SRC_SUB']))
+                        continue
+
+                # Frame forwarding (same rewrites as bridgeIPSC)
+                _tmp_data = _data
+                _tmp_data = _tmp_data.replace(_peerid, _target_system['LOCAL']['RADIO_ID'], 1)
+                _tmp_data = _tmp_data.replace(_src_sub + _dst_group, _src_sub + _target['TGID'], 1)
+                _tmp_data = _tmp_data.replace(_dst_group + _src_sub, _target['TGID'] + _src_sub, 1)
+                _call_info = int_id(_data[17:18])
+                if _target['TS'] == 1:
+                    _call_info &= ~(1 << 5)
+                elif _target['TS'] == 2:
+                    _call_info |= 1 << 5
+                _tmp_data = _tmp_data[:17] + bytes([_call_info]) + _tmp_data[18:]
+                if _burst_data_type in (SLOT1_VOICE, SLOT2_VOICE):
+                    _new_burst = SLOT1_VOICE if _target['TS'] == 1 else SLOT2_VOICE
+                    _tmp_data = _tmp_data[:30] + bytes([_new_burst]) + _tmp_data[31:]
+
+                systems[_target['SYSTEM']].transmit_group_voice(
+                    _src_sub, _target['TGID'], _target['TS'], _burst_data_type, _tmp_data, _peerid)
+
+                _target_status[_target['TS']]['TX_TGID']    = _target['TGID']
+                _target_status[_target['TS']]['TX_TIME']     = now
+                _target_status[_target['TS']]['TX_SRC_SUB']  = _src_sub
+
+        self.STATUS[_ts]['RX_TGID'] = _dst_group
+        self.STATUS[_ts]['RX_TIME'] = now
+
+
+# ---------------------------------------------------------------------------
+# TRUNK system factory
+# ---------------------------------------------------------------------------
+
+async def mk_trunk_systems(_config, _systems, _report_server):
+    """Instantiate and bind UDP endpoints for all TRUNK-type systems in config.
+
+    Called from async_main() after mk_ipsc_systems() so that TRUNK and IPSC
+    systems share the same global systems dict.  TRUNK systems are skipped by
+    mk_ipsc_systems() (which only handles IPSC MASTER/PEER systems).
+    """
+    loop = asyncio.get_running_loop()
+    for system in _config['SYSTEMS']:
+        if _config['SYSTEMS'][system].get('SYSTEM_TYPE') != 'TRUNK':
+            continue
+        _systems[system] = bridgeTRUNK(system, _config, _report_server)
+        proto = _systems[system]
+        ip    = _config['SYSTEMS'][system]['LOCAL']['IP'] or '0.0.0.0'
+        port  = _config['SYSTEMS'][system]['LOCAL']['PORT']
+        await loop.create_datagram_endpoint(
+            lambda p=proto: p,
+            local_addr=(ip, port),
+        )
+        logger.info('(%s) TRUNK UDP endpoint bound on %s:%s', system, ip, port)
+    return _systems
+
+
+# ---------------------------------------------------------------------------
 # __main__
 # ---------------------------------------------------------------------------
 
@@ -407,6 +574,7 @@ if __name__ == '__main__':
         peer_ids, subscriber_ids, talkgroup_ids, local_ids = build_aliases(CONFIG)
 
         await mk_ipsc_systems(CONFIG, systems, bridgeIPSC, report_server)
+        await mk_trunk_systems(CONFIG, systems, report_server)
 
         process_acls(CONFIG)
 
@@ -415,8 +583,29 @@ if __name__ == '__main__':
         TRUNKS      = CONFIG_DICT['TRUNKS']
         BRIDGES     = CONFIG_DICT['BRIDGES']
 
+        # TRUNK-type systems always bypass contention — add them to TRUNKS
+        # automatically so operators don't have to list them in bridge_rules.py.
+        for system in CONFIG['SYSTEMS']:
+            if CONFIG['SYSTEMS'][system].get('SYSTEM_TYPE') == 'TRUNK':
+                if system not in TRUNKS:
+                    TRUNKS.append(system)
+                    logger.info('(%s) TRUNK auto-added to contention bypass list', system)
+
         global BRIDGE_SRC_INDEX, BRIDGE_BY_SYSTEM
         BRIDGE_SRC_INDEX, BRIDGE_BY_SYSTEM = index_bridges(BRIDGES)
+
+        # Build and install the fast TGID ingress filter for each trunk system.
+        # The filter is derived from bridge rules so it stays in sync with routing
+        # without requiring a separate configuration entry.
+        for system in CONFIG['SYSTEMS']:
+            if CONFIG['SYSTEMS'][system].get('SYSTEM_TYPE') == 'TRUNK':
+                tgids = frozenset(
+                    member['TGID']
+                    for bridge_members in BRIDGES.values()
+                    for member in bridge_members
+                    if member['SYSTEM'] == system
+                )
+                systems[system].set_tgid_filter(tgids)
 
         loop.create_task(run_periodic(60, rule_timer_loop, 'rule_timer', report_server))
 

@@ -99,6 +99,23 @@ def _systems_snapshot(_systems):
     """Produce a JSON-serializable view of the live SYSTEMS dict."""
     result = {}
     for name, sys in _systems.items():
+        # TRUNK systems have a different config structure; report them separately.
+        if sys.get('SYSTEM_TYPE') == 'TRUNK':
+            local = sys['LOCAL']
+            trunk = sys['TRUNK']
+            result[name] = {
+                'MODE':           'TRUNK',
+                'RADIO_ID':       int_id(local['RADIO_ID']),
+                'IP':             local['IP'] or '0.0.0.0',
+                'PORT':           local['PORT'],
+                'GROUP_HANGTIME': local['GROUP_HANGTIME'],
+                'PEER_IP':        trunk['PEER_IP'],
+                'PEER_PORT':      trunk['PEER_PORT'],
+                'MASTER': {},
+                'PEERS':  {},
+            }
+            continue
+
         local  = sys['LOCAL']
         master = sys['MASTER']
         peers  = sys['PEERS']
@@ -411,6 +428,8 @@ def print_master(_config, _network):
 async def mk_ipsc_systems(_config, _systems, _ipsc, _report_server):
     loop = asyncio.get_running_loop()
     for system in _config['SYSTEMS']:
+        if _config['SYSTEMS'][system].get('SYSTEM_TYPE') == 'TRUNK':
+            continue  # TRUNK systems are instantiated separately by bridge.py
         if _config['SYSTEMS'][system]['LOCAL']['ENABLED']:
             _systems[system] = _ipsc(system, _config, _report_server)
             proto = _systems[system]
