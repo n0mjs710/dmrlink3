@@ -46,6 +46,8 @@
   .peers-hdr{display:flex;justify-content:space-between;align-items:center;margin:4px 0 6px}
   .peers-hdr h3{margin:0}
   .slot-pills{display:flex;gap:8px;flex-shrink:0;margin-left:16px}
+  .slot-col{display:flex;flex-direction:column;align-items:center}
+  .slot-label{font-size:10px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px}
   .spill{width:280px;border-radius:6px;padding:5px 10px;font-size:12px;border:1px solid var(--border);box-sizing:border-box}
   .spill-top{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.4}
   .spill-bot{font-size:11px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.4;opacity:.85}
@@ -101,14 +103,21 @@ function sysTsPill(sys, ts){
   const rx = ST.active[sys+'|'+ts];
   const tx = ST.tx_active[sys+'|'+ts];
   function espan(e){ const s=(Date.now()/1000)-(e._arrived||0); return '<span class="js-dur" data-start="'+esc(String(e._arrived||0))+'">'+dur(s)+'</span>'; }
-  function callType(e){ return (e.event||'').includes('GROUP') ? 'Voice' : 'Unit'; }
+  function callType(e){
+    const ev = e.event||'';
+    if(ev.includes('GROUP VOICE')) return 'Group Voice';
+    if(ev.includes('UNIT VOICE'))  return 'Unit Voice';
+    if(ev.includes('GROUP DATA'))  return 'Group Data';
+    if(ev.includes('UNIT DATA'))   return 'Unit Data';
+    return 'Voice';
+  }
   if(rx){
     const src  = rx.src_alias  ? esc(rx.src_alias)  : esc(String(rx.src||''));
     const peer = rx.peer_alias ? esc(rx.peer_alias) : esc(String(rx.peer||''));
     const tg   = rx.tgid_alias ? esc(rx.tgid_alias) : esc(String(rx.tgid||''));
     return '<div class="spill rx">'
-         + '<div class="spill-top">TS'+ts+' &nbsp;RX &nbsp;'+callType(rx)+' &nbsp;→ '+tg+'</div>'
-         + '<div class="spill-bot">'+src+' via '+peer+' · '+espan(rx)+'</div>'
+         + '<div class="spill-top">'+src+' → '+tg+'</div>'
+         + '<div class="spill-bot">RX · '+callType(rx)+' · via '+peer+' · '+espan(rx)+'</div>'
          + '</div>';
   }
   if(tx){
@@ -116,8 +125,8 @@ function sysTsPill(sys, ts){
     const src_peer = tx.src_peer_alias  ? esc(tx.src_peer_alias)  : esc(String(tx.src_peer||''));
     const tg       = tx.tgid_alias      ? esc(tx.tgid_alias)      : esc(String(tx.tgid||''));
     return '<div class="spill tx">'
-         + '<div class="spill-top">TS'+ts+' &nbsp;TX &nbsp;'+callType(tx)+' &nbsp;→ '+tg+'</div>'
-         + '<div class="spill-bot">'+src+' via '+src_peer+' · '+espan(tx)+'</div>'
+         + '<div class="spill-top">'+src+' → '+tg+'</div>'
+         + '<div class="spill-bot">TX · '+callType(tx)+' · via '+src_peer+' · '+espan(tx)+'</div>'
          + '</div>';
   }
   const hg = ST.hang[sys+'|'+ts];
@@ -126,13 +135,13 @@ function sysTsPill(sys, ts){
     const nowS = Date.now()/1000;
     const left = Math.max(0, hg._expires - nowS);
     return '<div class="spill hang">'
-         + '<div class="spill-top">TS'+ts+' &nbsp;'+(hg._ht==='tx'?'TX':'RX')+' &nbsp;hang &nbsp;→ '+tg+'</div>'
+         + '<div class="spill-top">'+(hg._ht==='tx'?'TX':'RX')+' hang → '+tg+'</div>'
          + '<div class="spill-bot"><span class="js-countdown" data-rem="'+left.toFixed(1)+'" data-arr="'+Date.now()+'">'+dur(left)+'</span> remaining</div>'
          + '</div>';
   }
   return '<div class="spill idle">'
-       + '<div class="spill-top">TS'+ts+'</div>'
-       + '<div class="spill-bot">&#8212; idle &#8212;</div>'
+       + '<div class="spill-top">&#8212; idle &#8212;</div>'
+       + '<div class="spill-bot">&nbsp;</div>'
        + '</div>';
 }
 
@@ -159,7 +168,10 @@ function renderSystems(){
     const totalCount = pids.length + (ms ? 1 : 0);
     h += '<div class="peers-hdr">'
        + '<h3>Peers in IPSC ('+totalCount+')</h3>'
-       + '<div class="slot-pills">'+sysTsPill(n,1)+sysTsPill(n,2)+'</div>'
+       + '<div class="slot-pills">'
+       + '<div class="slot-col"><div class="slot-label">TS1</div>'+sysTsPill(n,1)+'</div>'
+       + '<div class="slot-col"><div class="slot-label">TS2</div>'+sysTsPill(n,2)+'</div>'
+       + '</div>'
        + '</div>';
 
     if(!totalCount){
