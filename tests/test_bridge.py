@@ -55,21 +55,30 @@ class BridgeBase(unittest.TestCase):
         self.master.send_to_ipsc = MagicMock()
         self.peer.send_to_ipsc   = MagicMock()
 
-        self._orig_systems = dict(dmrlink.systems)
+        self._orig_systems   = dict(dmrlink.systems)
+        self._orig_bridges   = bridge.BRIDGES
+        self._orig_trunks    = bridge.TRUNKS
+        self._orig_src_index = bridge.BRIDGE_SRC_INDEX
+        self._orig_by_system = bridge.BRIDGE_BY_SYSTEM
+
         dmrlink.systems.clear()
         dmrlink.systems.update({'TEST-MASTER': self.master, 'TEST-PEER': self.peer})
 
-        self._orig_bridges = bridge.BRIDGES
-        self._orig_trunks  = bridge.TRUNKS
-
-        bridge.BRIDGES = make_bridge_rules('TEST-MASTER', 'TEST-PEER', TGID_9)
-        bridge.TRUNKS  = []
+        bridge.TRUNKS = []
+        self._set_bridges(make_bridge_rules('TEST-MASTER', 'TEST-PEER', TGID_9))
 
     def tearDown(self):
         dmrlink.systems.clear()
         dmrlink.systems.update(self._orig_systems)
-        bridge.BRIDGES = self._orig_bridges
-        bridge.TRUNKS  = self._orig_trunks
+        bridge.BRIDGES          = self._orig_bridges
+        bridge.TRUNKS           = self._orig_trunks
+        bridge.BRIDGE_SRC_INDEX = self._orig_src_index
+        bridge.BRIDGE_BY_SYSTEM = self._orig_by_system
+
+    def _set_bridges(self, bridges):
+        """Replace bridge.BRIDGES and rebuild the routing indexes in one step."""
+        bridge.BRIDGES = bridges
+        bridge.BRIDGE_SRC_INDEX, bridge.BRIDGE_BY_SYSTEM = bridge.index_bridges(bridges)
 
     def _call_gv(self, system, src, dst, burst_type, ts):
         pkt = make_gv_packet(EXT_ID_B, src, dst, burst_type, ts)
@@ -95,7 +104,7 @@ class TestForwarding(BridgeBase):
         self.assertEqual(self.peer.send_to_ipsc.call_count, 5)
 
     def test_bridge_inactive_not_forwarded(self):
-        bridge.BRIDGES = make_bridge_rules('TEST-MASTER', 'TEST-PEER', TGID_9, active=False)
+        self._set_bridges(make_bridge_rules('TEST-MASTER', 'TEST-PEER', TGID_9, active=False))
         self._call_gv(self.master, SRC_SUB, TGID_9, VOICE_HEAD, 1)
         self.peer.send_to_ipsc.assert_not_called()
 
@@ -133,7 +142,7 @@ class TestPacketRewrite(BridgeBase):
 
     def test_ipsc_dst_tgid_rewritten(self):
         """When src_tgid ≠ tgt_tgid, the IPSC dst_group (bytes 9-11) gets rewritten."""
-        bridge.BRIDGES = make_bridge_rules('TEST-MASTER', 'TEST-PEER', TGID_9, TGID_10)
+        self._set_bridges(make_bridge_rules('TEST-MASTER', 'TEST-PEER', TGID_9, TGID_10))
         fwd = self._forwarded(SRC_SUB, TGID_9, VOICE_HEAD, 1)
         self.assertEqual(fwd[9:12], TGID_10,
                          'Forwarded IPSC dst_group should be target TGID (10)')
@@ -141,7 +150,7 @@ class TestPacketRewrite(BridgeBase):
 
     def test_dmr_lc_dst_tgid_rewritten(self):
         """The DMR LC dst field (bytes 31-33) should also be rewritten to target TGID."""
-        bridge.BRIDGES = make_bridge_rules('TEST-MASTER', 'TEST-PEER', TGID_9, TGID_10)
+        self._set_bridges(make_bridge_rules('TEST-MASTER', 'TEST-PEER', TGID_9, TGID_10))
         fwd = self._forwarded(SRC_SUB, TGID_9, VOICE_HEAD, 1)
         self.assertEqual(fwd[31:34], TGID_10,
                          'Forwarded DMR LC dst should be target TGID (10)')
@@ -154,9 +163,9 @@ class TestPacketRewrite(BridgeBase):
 
     def test_ts_call_info_bit_set_for_ts2_target(self):
         """When target TS=2, call_info bit 5 should be set (TS2)."""
-        bridge.BRIDGES = make_bridge_rules('TEST-MASTER', 'TEST-PEER',
-                                           src_tgid=TGID_9, tgt_tgid=TGID_9, ts=1, active=True)
-        # Override to make target TS=2
+        self._set_bridges(make_bridge_rules('TEST-MASTER', 'TEST-PEER',
+                                            src_tgid=TGID_9, tgt_tgid=TGID_9, ts=1, active=True))
+        # Override to make target TS=2 (mutates the member in-place so the index reflects it)
         bridge.BRIDGES['TESTBRIDGE'][1]['TS'] = 2
         self._call_gv(self.master, SRC_SUB, TGID_9, VOICE_HEAD, 1)
         fwd = self.peer.send_to_ipsc.call_args[0][0]
@@ -165,14 +174,14 @@ class TestPacketRewrite(BridgeBase):
 
     def test_slot2_burst_rewritten_to_slot1_for_ts1_target(self):
         """Source TS2 SLOT2_VOICE bridged to a TS1 target: burst type rewritten to SLOT1_VOICE."""
-        bridge.BRIDGES = {
+        self._set_bridges({
             'TESTBRIDGE': [
                 {'SYSTEM': 'TEST-MASTER', 'TS': 2, 'TGID': TGID_9, 'ACTIVE': True,
                  'TO_TYPE': 'NONE', 'TIMEOUT': 0, 'TIMER': 0, 'ON': [], 'OFF': [], 'RESET': []},
                 {'SYSTEM': 'TEST-PEER',   'TS': 1, 'TGID': TGID_9, 'ACTIVE': True,
                  'TO_TYPE': 'NONE', 'TIMEOUT': 0, 'TIMER': 0, 'ON': [], 'OFF': [], 'RESET': []},
             ]
-        }
+        })
         pkt = make_gv_packet(EXT_ID_B, SRC_SUB, TGID_9, SLOT2_VOICE, 2)
         self.master.group_voice(SRC_SUB, TGID_9, 2, False, EXT_ID_B, pkt)
         fwd = self.peer.send_to_ipsc.call_args[0][0]
@@ -181,14 +190,14 @@ class TestPacketRewrite(BridgeBase):
 
     def test_slot1_burst_rewritten_to_slot2_for_ts2_target(self):
         """Source TS1 SLOT1_VOICE bridged to a TS2 target: burst type rewritten to SLOT2_VOICE."""
-        bridge.BRIDGES = {
+        self._set_bridges({
             'TESTBRIDGE': [
                 {'SYSTEM': 'TEST-MASTER', 'TS': 1, 'TGID': TGID_9, 'ACTIVE': True,
                  'TO_TYPE': 'NONE', 'TIMEOUT': 0, 'TIMER': 0, 'ON': [], 'OFF': [], 'RESET': []},
                 {'SYSTEM': 'TEST-PEER',   'TS': 2, 'TGID': TGID_9, 'ACTIVE': True,
                  'TO_TYPE': 'NONE', 'TIMEOUT': 0, 'TIMER': 0, 'ON': [], 'OFF': [], 'RESET': []},
             ]
-        }
+        })
         pkt = make_gv_packet(EXT_ID_B, SRC_SUB, TGID_9, SLOT1_VOICE, 1)
         self.master.group_voice(SRC_SUB, TGID_9, 1, False, EXT_ID_B, pkt)
         fwd = self.peer.send_to_ipsc.call_args[0][0]
@@ -215,18 +224,30 @@ class TestCallBoundary(unittest.TestCase):
 
     def setUp(self):
         config = _make_two_system_config()
+        self._orig_systems   = dict(dmrlink.systems)
+        self._orig_bridges   = bridge.BRIDGES
+        self._orig_trunks    = bridge.TRUNKS
+        self._orig_src_index = bridge.BRIDGE_SRC_INDEX
+        self._orig_by_system = bridge.BRIDGE_BY_SYSTEM
+
         # No BRIDGES needed — we are only checking rx_start tracking
-        bridge.BRIDGES = {}
-        bridge.TRUNKS  = []
+        bridge.BRIDGES          = {}
+        bridge.TRUNKS           = []
+        bridge.BRIDGE_SRC_INDEX = {}
+        bridge.BRIDGE_BY_SYSTEM = {}
+
         self.proto = bridge.bridgeIPSC('TEST-MASTER', config, None)
         self.proto.transport = MockDatagramTransport()
 
-        self._orig_systems = dict(dmrlink.systems)
         dmrlink.systems.clear()
 
     def tearDown(self):
         dmrlink.systems.clear()
         dmrlink.systems.update(self._orig_systems)
+        bridge.BRIDGES          = self._orig_bridges
+        bridge.TRUNKS           = self._orig_trunks
+        bridge.BRIDGE_SRC_INDEX = self._orig_src_index
+        bridge.BRIDGE_BY_SYSTEM = self._orig_by_system
 
     def _gv(self, burst_type, ts=1, src=SRC_SUB, dst=TGID_9):
         pkt = make_gv_packet(EXT_ID_B, src, dst, burst_type, ts)

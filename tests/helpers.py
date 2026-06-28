@@ -65,6 +65,9 @@ def make_system(radio_id_int, ip, port, master_peer=True,
             'AUTH_KEY':     b'\x00' * 20,
             'GROUP_HANGTIME': 5,
             'NUM_PEERS':    0,
+            # PERMIT:ALL — mirrors what process_acls() produces at runtime.
+            # acl_build('PERMIT:ALL', PEER_MAX) → (True, frozenset(), (1,), (4294967295,))
+            'REG_ACL':      (True, frozenset(), (1,), (4294967295,)),
         },
         'MASTER': {
             'RADIO_ID':     b'\x00\x00\x00\x00',
@@ -91,7 +94,12 @@ def make_system(radio_id_int, ip, port, master_peer=True,
 def make_config(systems_dict=None):
     """Return a minimal CONFIG dict suitable for IPSC / bridgeIPSC construction."""
     return {
-        'GLOBAL': {'PATH': '/tmp'},
+        'GLOBAL': {
+            'PATH':    '/tmp',
+            # PERMIT:ALL — mirrors what process_acls() produces at runtime.
+            # acl_build('PERMIT:ALL', ID_MAX) → (True, frozenset(), (1,), (16776415,))
+            'SUB_ACL': (True, frozenset(), (1,), (16776415,)),
+        },
         'REPORTS': {
             'REPORT_NETWORKS':       'NONE',
             'REPORT_RCM':            False,

@@ -28,10 +28,6 @@ from helpers import (
     make_gv_packet, make_bridge_rules,
 )
 
-# Pre-built PERMIT:ALL ACL tuple — what config.acl_build('PERMIT:ALL', ID_MAX)
-# returns.  Avoids importing config just for a constant.
-_PERMIT_ALL = (True, frozenset(), (1,), (16776415,))
-
 MASTER_ID  = 3112000
 TRUNK_RID  = 3129100
 EXT_ID     = 3112010
@@ -42,15 +38,10 @@ TGID_9     = bytes_3(9)
 
 def _make_config():
     """Two-system config: one IPSC master and one trunk endpoint."""
-    cfg = make_config({
+    return make_config({
         'TEST-MASTER': make_system(MASTER_ID, '127.0.0.1', 50100, master_peer=True),
         'TEST-TRUNK':  make_trunk_system(TRUNK_RID),
     })
-    # bridgeIPSC.group_voice() and bridgeTRUNK.group_voice() both call
-    # acl_check() against GLOBAL.SUB_ACL; supply PERMIT:ALL so the tests
-    # reach the forwarding code.
-    cfg['GLOBAL']['SUB_ACL'] = _PERMIT_ALL
-    return cfg
 
 
 class BridgeTrunkBase(unittest.TestCase):
