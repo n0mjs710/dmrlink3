@@ -51,9 +51,11 @@ __email__       = 'n0mjs@me.com'
 logger = logging.getLogger(__name__)
 
 # Bridge state; populated in async_main after rules file is loaded
-BRIDGES     = {}
-TRUNKS      = []
-BRIDGE_CONF = {}
+BRIDGES          = {}
+TRUNKS           = []
+BRIDGE_CONF      = {}
+BRIDGE_SRC_INDEX = {}   # (system, ts, tgid) -> [(bridge, member, all_members)]
+BRIDGE_BY_SYSTEM = {}   # system -> [(bridge, member)]
 
 # Alias dicts; populated on startup in async_main (dashboard owns downloads/refresh)
 peer_ids       = {}
@@ -94,13 +96,10 @@ def make_bridge_config(_bridge_rules):
             if _system['SYSTEM'] not in CONFIG['SYSTEMS']:
                 sys.exit('ERROR: Conference bridge configured for system not found in main config')
 
-            _system['TGID'] = bytes_3(_system['TGID'])
-            for i, _ in enumerate(_system['ON']):
-                _system['ON'][i] = bytes_3(_system['ON'][i])
-            for i, _ in enumerate(_system['OFF']):
-                _system['OFF'][i] = bytes_3(_system['OFF'][i])
-            for i, _ in enumerate(_system['RESET']):
-                _system['RESET'][i] = bytes_3(_system['RESET'][i])
+            _system['TGID']   = bytes_3(_system['TGID'])
+            _system['ON']     = frozenset(bytes_3(x) for x in _system['ON'])
+            _system['OFF']    = frozenset(bytes_3(x) for x in _system['OFF'])
+            _system['RESET']  = frozenset(bytes_3(x) for x in _system['RESET'])
             _system['TIMEOUT'] = _system['TIMEOUT'] * 60
             _system['TIMER']   = time() + _system['TIMEOUT']
 
@@ -109,6 +108,18 @@ def make_bridge_config(_bridge_rules):
         'BRIDGES':     bridge_file.BRIDGES,
         'TRUNKS':      bridge_file.TRUNKS,
     }
+
+
+def index_bridges(_bridges):
+    src_index = {}
+    by_system = {}
+    for _bridge in _bridges:
+        _members = _bridges[_bridge]
+        for _member in _members:
+            src_index.setdefault((_member['SYSTEM'], _member['TS'], _member['TGID']), []).append(
+                (_bridge, _member, _members))
+            by_system.setdefault(_member['SYSTEM'], []).append((_bridge, _member))
+    return src_index, by_system
 
 
 # ---------------------------------------------------------------------------
@@ -219,123 +230,117 @@ class bridgeIPSC(IPSC):
         # current before the VOICE_HEAD itself is forwarded and before any unkey delay.
         if _burst_data_type == VOICE_HEAD:
             _bridge_changed = False
-            for _bridge in BRIDGES:
-                for _system in BRIDGES[_bridge]:
-                    if _system['SYSTEM'] != self._system:
-                        continue
-                    if _ts != _system['TS']:
-                        continue
-                    if _dst_group in _system['ON'] or _dst_group in _system['RESET']:
-                        if _dst_group in _system['ON'] and not _system['ACTIVE']:
-                            _system['ACTIVE'] = True
-                            _bridge_changed = True
-                            logger.info('(%s) Bridge: %s activated', self._system, _bridge)
-                            if _system['TO_TYPE'] == 'OFF':
-                                _system['TIMER'] = now
-                                logger.info('(%s) Bridge: %s OFF-timer cancelled (activated by ON trigger)', self._system, _bridge)
-                        if _system['ACTIVE'] and _system['TO_TYPE'] == 'ON':
-                            _system['TIMER'] = now + _system['TIMEOUT']
-                            logger.info('(%s) Bridge: %s ON-timer reset to %.0fs', self._system, _bridge, _system['TIMEOUT'])
-                    if _dst_group in _system['OFF'] or _dst_group in _system['RESET']:
-                        if _dst_group in _system['OFF'] and _system['ACTIVE']:
-                            _system['ACTIVE'] = False
-                            _bridge_changed = True
-                            logger.info('(%s) Bridge: %s deactivated', self._system, _bridge)
-                            if _system['TO_TYPE'] == 'ON':
-                                _system['TIMER'] = now
-                                logger.info('(%s) Bridge: %s ON-timer cancelled (deactivated by OFF trigger)', self._system, _bridge)
-                        if not _system['ACTIVE'] and _system['TO_TYPE'] == 'OFF':
-                            _system['TIMER'] = now + _system['TIMEOUT']
-                            logger.info('(%s) Bridge: %s OFF-timer reset to %.0fs', self._system, _bridge, _system['TIMEOUT'])
+            for _bridge, _system in BRIDGE_BY_SYSTEM.get(self._system, ()):
+                if _ts != _system['TS']:
+                    continue
+                if _dst_group in _system['ON'] or _dst_group in _system['RESET']:
+                    if _dst_group in _system['ON'] and not _system['ACTIVE']:
+                        _system['ACTIVE'] = True
+                        _bridge_changed = True
+                        logger.info('(%s) Bridge: %s activated', self._system, _bridge)
+                        if _system['TO_TYPE'] == 'OFF':
+                            _system['TIMER'] = now
+                            logger.info('(%s) Bridge: %s OFF-timer cancelled (activated by ON trigger)', self._system, _bridge)
+                    if _system['ACTIVE'] and _system['TO_TYPE'] == 'ON':
+                        _system['TIMER'] = now + _system['TIMEOUT']
+                        logger.info('(%s) Bridge: %s ON-timer reset to %.0fs', self._system, _bridge, _system['TIMEOUT'])
+                if _dst_group in _system['OFF'] or _dst_group in _system['RESET']:
+                    if _dst_group in _system['OFF'] and _system['ACTIVE']:
+                        _system['ACTIVE'] = False
+                        _bridge_changed = True
+                        logger.info('(%s) Bridge: %s deactivated', self._system, _bridge)
+                        if _system['TO_TYPE'] == 'ON':
+                            _system['TIMER'] = now
+                            logger.info('(%s) Bridge: %s ON-timer cancelled (deactivated by OFF trigger)', self._system, _bridge)
+                    if not _system['ACTIVE'] and _system['TO_TYPE'] == 'OFF':
+                        _system['TIMER'] = now + _system['TIMEOUT']
+                        logger.info('(%s) Bridge: %s OFF-timer reset to %.0fs', self._system, _bridge, _system['TIMEOUT'])
             if _bridge_changed and self._report:
                 self._report.send_bridge()
 
-        for _bridge in BRIDGES:
-            for _system in BRIDGES[_bridge]:
-                if (_system['SYSTEM'] == self._system and
-                        _system['TGID'] == _dst_group and
-                        _system['TS'] == _ts and
-                        _system['ACTIVE']):
+        for _bridge, _system, _members in BRIDGE_SRC_INDEX.get((self._system, _ts, _dst_group), ()):
+            if not _system['ACTIVE']:
+                continue
 
-                    for _target in BRIDGES[_bridge]:
-                        if _target['SYSTEM'] == self._system:
-                            continue
-                        if not _target['ACTIVE']:
-                            continue
+            for _target in _members:
+                if _target['SYSTEM'] == self._system:
+                    continue
+                if not _target['ACTIVE']:
+                    continue
 
-                        _target_status = systems[_target['SYSTEM']].STATUS
-                        _target_system = self._CONFIG['SYSTEMS'][_target['SYSTEM']]
+                _target_status = systems[_target['SYSTEM']].STATUS
+                _target_system = self._CONFIG['SYSTEMS'][_target['SYSTEM']]
 
-                        # BEGIN CONTENTION HANDLING
-                        if _target['SYSTEM'] not in TRUNKS:
-                            if ((_target['TGID'] != _target_status[_target['TS']]['RX_TGID']) and
-                                    ((now - _target_status[_target['TS']]['RX_TIME']) < _target_system['LOCAL']['GROUP_HANGTIME'])):
-                                if _burst_data_type == VOICE_HEAD:
-                                    logger.info('(%s) Call not bridged to TGID %s, target in RX group hangtime: %s TS: %s TGID: %s',
-                                                self._system, int_id(_target['TGID']),
-                                                _target['SYSTEM'], _target['TS'],
-                                                int_id(_target_status[_target['TS']]['RX_TGID']))
-                                continue
-                            if ((_target['TGID'] != _target_status[_target['TS']]['TX_TGID']) and
-                                    ((now - _target_status[_target['TS']]['TX_TIME']) < _target_system['LOCAL']['GROUP_HANGTIME'])):
-                                if _burst_data_type == VOICE_HEAD:
-                                    logger.info('(%s) Call not bridged to TGID %s, target in TX group hangtime: %s TS: %s TGID: %s',
-                                                self._system, int_id(_target['TGID']),
-                                                _target['SYSTEM'], _target['TS'],
-                                                int_id(_target_status[_target['TS']]['TX_TGID']))
-                                continue
-                            if ((_target['TGID'] == _target_status[_target['TS']]['RX_TGID']) and
-                                    ((now - _target_status[_target['TS']]['RX_TIME']) < TS_CLEAR_TIME)):
-                                if _burst_data_type == VOICE_HEAD:
-                                    logger.info('(%s) Call not bridged to TGID %s, matching call active on target: %s TS: %s TGID: %s',
-                                                self._system, int_id(_target['TGID']),
-                                                _target['SYSTEM'], _target['TS'],
-                                                int_id(_target_status[_target['TS']]['RX_TGID']))
-                                continue
-                            if ((_target['TGID'] == _target_status[_target['TS']]['TX_TGID']) and
-                                    (_src_sub != _target_status[_target['TS']]['TX_SRC_SUB']) and
-                                    ((now - _target_status[_target['TS']]['TX_TIME']) < TS_CLEAR_TIME)):
-                                if _burst_data_type == VOICE_HEAD:
-                                    logger.info('(%s) Call not bridged for sub %s, bridge in progress on target: %s TS: %s TGID: %s SUB: %s',
-                                                self._system, int_id(_src_sub),
-                                                _target['SYSTEM'], _target['TS'],
-                                                int_id(_target_status[_target['TS']]['TX_TGID']),
-                                                int_id(_target_status[_target['TS']]['TX_SRC_SUB']))
-                                continue
-                        # END CONTENTION HANDLING
+                # BEGIN CONTENTION HANDLING
+                if _target['SYSTEM'] not in TRUNKS:
+                    if ((_target['TGID'] != _target_status[_target['TS']]['RX_TGID']) and
+                            ((now - _target_status[_target['TS']]['RX_TIME']) < _target_system['LOCAL']['GROUP_HANGTIME'])):
+                        if _burst_data_type == VOICE_HEAD:
+                            logger.info('(%s) Call not bridged to TGID %s, target in RX group hangtime: %s TS: %s TGID: %s',
+                                        self._system, int_id(_target['TGID']),
+                                        _target['SYSTEM'], _target['TS'],
+                                        int_id(_target_status[_target['TS']]['RX_TGID']))
+                        continue
+                    if ((_target['TGID'] != _target_status[_target['TS']]['TX_TGID']) and
+                            ((now - _target_status[_target['TS']]['TX_TIME']) < _target_system['LOCAL']['GROUP_HANGTIME'])):
+                        if _burst_data_type == VOICE_HEAD:
+                            logger.info('(%s) Call not bridged to TGID %s, target in TX group hangtime: %s TS: %s TGID: %s',
+                                        self._system, int_id(_target['TGID']),
+                                        _target['SYSTEM'], _target['TS'],
+                                        int_id(_target_status[_target['TS']]['TX_TGID']))
+                        continue
+                    if ((_target['TGID'] == _target_status[_target['TS']]['RX_TGID']) and
+                            ((now - _target_status[_target['TS']]['RX_TIME']) < TS_CLEAR_TIME)):
+                        if _burst_data_type == VOICE_HEAD:
+                            logger.info('(%s) Call not bridged to TGID %s, matching call active on target: %s TS: %s TGID: %s',
+                                        self._system, int_id(_target['TGID']),
+                                        _target['SYSTEM'], _target['TS'],
+                                        int_id(_target_status[_target['TS']]['RX_TGID']))
+                        continue
+                    if ((_target['TGID'] == _target_status[_target['TS']]['TX_TGID']) and
+                            (_src_sub != _target_status[_target['TS']]['TX_SRC_SUB']) and
+                            ((now - _target_status[_target['TS']]['TX_TIME']) < TS_CLEAR_TIME)):
+                        if _burst_data_type == VOICE_HEAD:
+                            logger.info('(%s) Call not bridged for sub %s, bridge in progress on target: %s TS: %s TGID: %s SUB: %s',
+                                        self._system, int_id(_src_sub),
+                                        _target['SYSTEM'], _target['TS'],
+                                        int_id(_target_status[_target['TS']]['TX_TGID']),
+                                        int_id(_target_status[_target['TS']]['TX_SRC_SUB']))
+                        continue
+                # END CONTENTION HANDLING
 
-                        # BEGIN FRAME FORWARDING
-                        _tmp_data = _data
+                # BEGIN FRAME FORWARDING
+                _tmp_data = _data
 
-                        # Rewrite Peer ID
-                        _tmp_data = _tmp_data.replace(_peerid, _target_system['LOCAL']['RADIO_ID'], 1)
+                # Rewrite Peer ID
+                _tmp_data = _tmp_data.replace(_peerid, _target_system['LOCAL']['RADIO_ID'], 1)
 
-                        # Rewrite IPSC SRC + DST GROUP
-                        _tmp_data = _tmp_data.replace(_src_sub + _dst_group, _src_sub + _target['TGID'], 1)
+                # Rewrite IPSC SRC + DST GROUP
+                _tmp_data = _tmp_data.replace(_src_sub + _dst_group, _src_sub + _target['TGID'], 1)
 
-                        # Rewrite DST GROUP + IPSC SRC in DMR LC
-                        _tmp_data = _tmp_data.replace(_dst_group + _src_sub, _target['TGID'] + _src_sub, 1)
+                # Rewrite DST GROUP + IPSC SRC in DMR LC
+                _tmp_data = _tmp_data.replace(_dst_group + _src_sub, _target['TGID'] + _src_sub, 1)
 
-                        # Rewrite IPSC timeslot byte
-                        _call_info = int_id(_data[17:18])
-                        if _target['TS'] == 1:
-                            _call_info &= ~(1 << 5)
-                        elif _target['TS'] == 2:
-                            _call_info |= 1 << 5
-                        _tmp_data = _tmp_data[:17] + bytes([_call_info]) + _tmp_data[18:]
+                # Rewrite IPSC timeslot byte
+                _call_info = int_id(_data[17:18])
+                if _target['TS'] == 1:
+                    _call_info &= ~(1 << 5)
+                elif _target['TS'] == 2:
+                    _call_info |= 1 << 5
+                _tmp_data = _tmp_data[:17] + bytes([_call_info]) + _tmp_data[18:]
 
-                        # Rewrite DMR timeslot in burst data
-                        if _burst_data_type in (SLOT1_VOICE, SLOT2_VOICE):
-                            _new_burst = SLOT1_VOICE if _target['TS'] == 1 else SLOT2_VOICE
-                            _tmp_data = _tmp_data[:30] + bytes([_new_burst]) + _tmp_data[31:]
+                # Rewrite DMR timeslot in burst data
+                if _burst_data_type in (SLOT1_VOICE, SLOT2_VOICE):
+                    _new_burst = SLOT1_VOICE if _target['TS'] == 1 else SLOT2_VOICE
+                    _tmp_data = _tmp_data[:30] + bytes([_new_burst]) + _tmp_data[31:]
 
-                        systems[_target['SYSTEM']].transmit_group_voice(
-                            _src_sub, _target['TGID'], _target['TS'], _burst_data_type, _tmp_data, _peerid)
-                        # END FRAME FORWARDING
+                systems[_target['SYSTEM']].transmit_group_voice(
+                    _src_sub, _target['TGID'], _target['TS'], _burst_data_type, _tmp_data, _peerid)
+                # END FRAME FORWARDING
 
-                        _target_status[_target['TS']]['TX_TGID']    = _target['TGID']
-                        _target_status[_target['TS']]['TX_TIME']     = now
-                        _target_status[_target['TS']]['TX_SRC_SUB']  = _src_sub
+                _target_status[_target['TS']]['TX_TGID']   = _target['TGID']
+                _target_status[_target['TS']]['TX_TIME']    = now
+                _target_status[_target['TS']]['TX_SRC_SUB'] = _src_sub
 
         # Record RX state for contention handler
         self.STATUS[_ts]['RX_TGID'] = _dst_group
@@ -409,6 +414,9 @@ if __name__ == '__main__':
         BRIDGE_CONF = CONFIG_DICT['BRIDGE_CONF']
         TRUNKS      = CONFIG_DICT['TRUNKS']
         BRIDGES     = CONFIG_DICT['BRIDGES']
+
+        global BRIDGE_SRC_INDEX, BRIDGE_BY_SYSTEM
+        BRIDGE_SRC_INDEX, BRIDGE_BY_SYSTEM = index_bridges(BRIDGES)
 
         loop.create_task(run_periodic(60, rule_timer_loop, 'rule_timer', report_server))
 
