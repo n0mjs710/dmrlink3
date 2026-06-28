@@ -415,8 +415,10 @@ if(new URLSearchParams(location.search).has('demo')){
     '1234abcd':{ system:'DEMO-TRUNK', stream_id:'1234abcd', direction:'tx', src:3155555, src_alias:'N0MJS',  tgid:31,   tgid_alias:'US Nationwide',   _arrived:_now-3  },
   };
   renderSystems();
+  // Demo mode: no WebSocket — state is static, setInterval ticker still runs.
+} else {
+  connect();
 }
-connect();
 </script>
 </body>
 </html>
