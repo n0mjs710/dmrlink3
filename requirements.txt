@@ -1,4 +1,5 @@
-dmr_utils3
+dmr_utils3>=0.1.31
 fastapi
 uvicorn[standard]
+ijson>=3.2
 pytest==9.1.1
