@@ -895,7 +895,7 @@ class IPSC(asyncio.DatagramProtocol):
             logger.info('(%s) Requesting peer list from master', self._system)
 
     def master_reg_req(self, _data, _peerid, _host, _port):
-        if not acl_check(_peerid, self._config['REG_ACL']):
+        if not acl_check(_peerid, self._local['REG_ACL']):
             logger.warning('(%s) Peer Registration ***REJECTED BY ACL***: %s %s:%s',
                            self._system, int_id(_peerid), _host, _port)
             return
