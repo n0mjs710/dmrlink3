@@ -224,6 +224,32 @@ def make_gv_packet(peer_id, src_sub, dst_group, burst_type, timeslot, seq=0):
     )
 
 
+def make_trunk_system(radio_id_int=3129100, ip='127.0.0.1', port=50200,
+                      peer_ip='10.0.0.1', peer_port=50200):
+    """Return a SYSTEMS entry for a TRUNK system (parallel to make_system).
+
+    Matches the structure produced by config.py when SYSTEM_TYPE = TRUNK.
+    """
+    return {
+        'SYSTEM_TYPE': 'TRUNK',
+        'LOCAL': {
+            'ENABLED':        True,
+            'SYSTEM_TYPE':    'TRUNK',
+            'RADIO_ID':       bytes_4(radio_id_int),
+            'IP':             ip,
+            'PORT':           port,
+            'GROUP_HANGTIME': 5,
+        },
+        'TRUNK': {
+            'PEER_IP':   peer_ip,
+            'PEER_PORT': peer_port,
+            'PEER_SOCK': (peer_ip, peer_port),
+        },
+        'MASTER': {},
+        'PEERS':  {},
+    }
+
+
 def make_bridge_rules(src_system, tgt_system, src_tgid, tgt_tgid=None, ts=1, active=True):
     """Return a BRIDGES dict with one bridge connecting src_system to tgt_system."""
     if tgt_tgid is None:

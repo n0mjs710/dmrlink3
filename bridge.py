@@ -339,9 +339,10 @@ class bridgeIPSC(IPSC):
                     _src_sub, _target['TGID'], _target['TS'], _burst_data_type, _tmp_data, _peerid)
                 # END FRAME FORWARDING
 
-                _target_status[_target['TS']]['TX_TGID']   = _target['TGID']
-                _target_status[_target['TS']]['TX_TIME']    = now
-                _target_status[_target['TS']]['TX_SRC_SUB'] = _src_sub
+                if _target['SYSTEM'] not in TRUNKS:
+                    _target_status[_target['TS']]['TX_TGID']   = _target['TGID']
+                    _target_status[_target['TS']]['TX_TIME']    = now
+                    _target_status[_target['TS']]['TX_SRC_SUB'] = _src_sub
 
         # Record RX state for contention handler
         self.STATUS[_ts]['RX_TGID'] = _dst_group
@@ -480,12 +481,13 @@ class bridgeTRUNK(TRUNK):
                 systems[_target['SYSTEM']].transmit_group_voice(
                     _src_sub, _target['TGID'], _target['TS'], _burst_data_type, _tmp_data, _peerid)
 
-                _target_status[_target['TS']]['TX_TGID']    = _target['TGID']
-                _target_status[_target['TS']]['TX_TIME']     = now
-                _target_status[_target['TS']]['TX_SRC_SUB']  = _src_sub
+                if _target['SYSTEM'] not in TRUNKS:
+                    _target_status[_target['TS']]['TX_TGID']    = _target['TGID']
+                    _target_status[_target['TS']]['TX_TIME']     = now
+                    _target_status[_target['TS']]['TX_SRC_SUB']  = _src_sub
 
-        self.STATUS[_ts]['RX_TGID'] = _dst_group
-        self.STATUS[_ts]['RX_TIME'] = now
+        # Trunk STATUS is {} — RX state writes are omitted; values are only
+        # consulted by contention checks, which are bypassed for trunk targets.
 
 
 # ---------------------------------------------------------------------------

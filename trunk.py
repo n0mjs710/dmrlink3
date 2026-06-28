@@ -170,18 +170,15 @@ class TRUNK(asyncio.DatagramProtocol):
         self._peer_port  = trunk_cfg['PEER_PORT']
         self._peer_sock  = trunk_cfg['PEER_SOCK']   # pre-built tuple for sendto()
 
-        # STATUS dict — TS-keyed to match bridgeIPSC.STATUS so the bridge
-        # routing core can write TX state after forwarding to this system.
-        # Contention checks (which read this dict) are bypassed for TRUNK
-        # systems via the TRUNKS list, so only the TX state writes matter.
-        self.STATUS = {
-            1: {'RX_TGID': b'\x00\x00\x00', 'TX_TGID': b'\x00\x00\x00',
-                'RX_TIME': 0,                'TX_TIME': 0,
-                'RX_SRC_SUB': b'\x00\x00\x00', 'TX_SRC_SUB': b'\x00\x00\x00'},
-            2: {'RX_TGID': b'\x00\x00\x00', 'TX_TGID': b'\x00\x00\x00',
-                'RX_TIME': 0,                'TX_TIME': 0,
-                'RX_SRC_SUB': b'\x00\x00\x00', 'TX_SRC_SUB': b'\x00\x00\x00'},
-        }
+        # STATUS is an empty dict.  A trunk carries an arbitrary number of
+        # simultaneous streams, so a TS-keyed structure would be a lie.
+        # TX state writes (from the routing core after forwarding TO this
+        # system) are guarded by the TRUNKS check in bridge.py and never
+        # execute.  RX state writes (from bridgeTRUNK.group_voice() when
+        # this system is the source) are omitted for the same reason: the
+        # values are only read by contention checks, which are bypassed for
+        # all trunk targets.
+        self.STATUS = {}
 
         # Outbound stream tracking: (ts, tgid_bytes) -> stream_id_bytes.
         # Created on VOICE_HEAD (or first burst for late-open); removed on VOICE_TERM.
