@@ -402,20 +402,114 @@ function connect(){
     setTimeout(connect, 2000);
   };
 }
+// ---------------------------------------------------------------------------
+// Demo mode (?demo in URL) — coherent static scenario, no WebSocket.
+// Traffic paradigm:
+//   KS-STATEWIDE (TGID 9, TS1): W0ABC keyed up on KS-MASTER →
+//     KS-MASTER TS1 RX, MO-PEER TS1 TX, TRUNK-EAST TX stream
+//   US-NATIONWIDE (TGID 31, TS2): N0CAL transmitting via TRUNK-EAST →
+//     TRUNK-EAST RX stream, KS-MASTER TS2 TX
+//   MO-LOCAL (TGID 3100, TS2): W0DEF just finished; MO-PEER TS2 in RX hang
+// ---------------------------------------------------------------------------
 if(new URLSearchParams(location.search).has('demo')){
-  const _now = Date.now()/1000;
-  ST.systems['DEMO-TRUNK'] = {
-    SYSTEM_TYPE:'TRUNK', RADIO_ID:'3129100',
-    IP:'0.0.0.0', PORT:50200, PEER_IP:'198.51.100.1', PEER_PORT:50200,
+  const _t = Date.now()/1000;
+
+  ST.systems = {
+    'KS-MASTER': {
+      MODE:'MASTER', RADIO_ID:'3112000', IP:'0.0.0.0', PORT:50100, GROUP_HANGTIME:5,
+      PEERS:{
+        '3112001':{ RADIO_ID:'3112001', IP:'10.1.1.1', PORT:50000, CONNECTED:true,  connected_secs:3672 },
+        '3112002':{ RADIO_ID:'3112002', IP:'10.1.1.2', PORT:50000, CONNECTED:true,  connected_secs:1245 },
+        '3112003':{ RADIO_ID:'3112003', IP:'10.1.1.3', PORT:50000, CONNECTED:false, connected_secs:null },
+      },
+    },
+    'MO-PEER': {
+      MODE:'PEER', RADIO_ID:'3161000', IP:'0.0.0.0', PORT:50101, GROUP_HANGTIME:5,
+      MASTER:{ RADIO_ID:'3112000', CONNECTED:true, connected_secs:7234, IP:'10.0.0.1', PORT:'50100' },
+      PEERS:{
+        '3161001':{ RADIO_ID:'3161001', IP:'10.2.1.1', PORT:50000, CONNECTED:true, connected_secs:2480 },
+        '3161002':{ RADIO_ID:'3161002', IP:'10.2.1.2', PORT:50000, CONNECTED:true, connected_secs:847  },
+      },
+    },
+    'TRUNK-EAST': {
+      SYSTEM_TYPE:'TRUNK', RADIO_ID:'3129100',
+      IP:'0.0.0.0', PORT:50200, PEER_IP:'198.51.100.42', PEER_PORT:50200,
+    },
   };
+
+  ST.bridges = {
+    'KS-STATEWIDE':[
+      { SYSTEM:'KS-MASTER', TS:1, TGID:9,    TGID_NAME:'KS Statewide',  ACTIVE:true, TO_TYPE:'NONE', TIMEOUT:0, TIMER:0, ON:[], OFF:[], RESET:[], remaining:null },
+      { SYSTEM:'MO-PEER',   TS:1, TGID:9,    TGID_NAME:'KS Statewide',  ACTIVE:true, TO_TYPE:'NONE', TIMEOUT:0, TIMER:0, ON:[], OFF:[], RESET:[], remaining:null },
+      { SYSTEM:'TRUNK-EAST',TS:1, TGID:9,    TGID_NAME:'KS Statewide',  ACTIVE:true, TO_TYPE:'NONE', TIMEOUT:0, TIMER:0, ON:[], OFF:[], RESET:[], remaining:null },
+    ],
+    'US-NATIONWIDE':[
+      { SYSTEM:'KS-MASTER',  TS:2, TGID:31,  TGID_NAME:'US Nationwide', ACTIVE:true, TO_TYPE:'NONE', TIMEOUT:0, TIMER:0, ON:[], OFF:[], RESET:[], remaining:null },
+      { SYSTEM:'TRUNK-EAST', TS:2, TGID:31,  TGID_NAME:'US Nationwide', ACTIVE:true, TO_TYPE:'NONE', TIMEOUT:0, TIMER:0, ON:[], OFF:[], RESET:[], remaining:null },
+    ],
+    'MO-LOCAL':[
+      { SYSTEM:'MO-PEER', TS:2, TGID:3100, TGID_NAME:'MO Local',       ACTIVE:true, TO_TYPE:'NONE', TIMEOUT:0, TIMER:0, ON:[], OFF:[], RESET:[], remaining:null },
+    ],
+  };
+
+  // W0ABC keyed up on KS Statewide 23s ago
+  ST.active = {
+    'KS-MASTER|1':{ system:'KS-MASTER', ts:1, event:'GROUP VOICE START',
+      src:3112001, src_alias:'W0ABC', peer:3112001, peer_alias:'W0ABC',
+      tgid:9, tgid_alias:'KS Statewide', _arrived:_t-23 },
+  };
+  // MO-PEER TS1 bridging that call; KS-MASTER TS2 receiving from trunk
+  ST.tx_active = {
+    'MO-PEER|1':  { system:'MO-PEER',   ts:1, event:'GROUP VOICE TX START',
+      src:3112001, src_alias:'W0ABC', src_peer:3112001, src_peer_alias:'W0ABC',
+      tgid:9,  tgid_alias:'KS Statewide',  _arrived:_t-23 },
+    'KS-MASTER|2':{ system:'KS-MASTER', ts:2, event:'GROUP VOICE TX START',
+      src:3188765, src_alias:'N0CAL', src_peer:3188765, src_peer_alias:'N0CAL',
+      tgid:31, tgid_alias:'US Nationwide', _arrived:_t-11 },
+  };
+  // Trunk streams matching both active flows
   ST.trunk_streams = {
-    'ab12cd34':{ system:'DEMO-TRUNK', stream_id:'ab12cd34', direction:'rx', src:3112000, src_alias:'W0ABC',  tgid:9,    tgid_alias:'KS Statewide',   _arrived:_now-47 },
-    'ef56ab78':{ system:'DEMO-TRUNK', stream_id:'ef56ab78', direction:'tx', src:3161234, src_alias:null,     tgid:3100, tgid_alias:'BrandMeister USA',_arrived:_now-12 },
-    'cd90ef12':{ system:'DEMO-TRUNK', stream_id:'cd90ef12', direction:'rx', src:3188765, src_alias:'KD0XYZ', tgid:31,   tgid_alias:'US Nationwide',   _arrived:_now-8  },
-    '1234abcd':{ system:'DEMO-TRUNK', stream_id:'1234abcd', direction:'tx', src:3155555, src_alias:'N0MJS',  tgid:31,   tgid_alias:'US Nationwide',   _arrived:_now-3  },
+    'ab12cd34':{ system:'TRUNK-EAST', stream_id:'ab12cd34', direction:'tx',
+      src:3112001, src_alias:'W0ABC', tgid:9,  tgid_alias:'KS Statewide',  _arrived:_t-23 },
+    'ef56ab78':{ system:'TRUNK-EAST', stream_id:'ef56ab78', direction:'rx',
+      src:3188765, src_alias:'N0CAL', tgid:31, tgid_alias:'US Nationwide', _arrived:_t-11 },
   };
-  renderSystems();
-  // Demo mode: no WebSocket — state is static, setInterval ticker still runs.
+  // MO-PEER TS2 in RX hang — W0DEF finished 3s ago, 5s hangtime → ~27s left from load
+  ST.hang = {
+    'MO-PEER|2':{ system:'MO-PEER', ts:2, tgid:3100, tgid_alias:'MO Local',
+      _ht:'rx', _expires:_t+27, _arrived:_t-3 },
+  };
+  // Call log, most-recent first
+  ST.log = [
+    { event:'GROUP VOICE TX START', system:'KS-MASTER', ts:2,
+      src:3188765, src_alias:'N0CAL', tgid:31, tgid_alias:'US Nationwide', _arrived:_t-11 },
+    { event:'GROUP VOICE TX START', system:'MO-PEER',   ts:1,
+      src:3112001, src_alias:'W0ABC', tgid:9,  tgid_alias:'KS Statewide',  _arrived:_t-23 },
+    { event:'GROUP VOICE START',    system:'KS-MASTER', ts:1,
+      src:3112001, src_alias:'W0ABC', peer:3112001, peer_alias:'W0ABC',
+      tgid:9, tgid_alias:'KS Statewide', _arrived:_t-23 },
+    { event:'GROUP VOICE END',      system:'MO-PEER',   ts:2,
+      src:3161001, src_alias:'W0DEF', peer:3161001, peer_alias:'W0DEF',
+      tgid:3100, tgid_alias:'MO Local', duration:14.2, _arrived:_t-3 },
+    { event:'GROUP VOICE START',    system:'MO-PEER',   ts:2,
+      src:3161001, src_alias:'W0DEF', peer:3161001, peer_alias:'W0DEF',
+      tgid:3100, tgid_alias:'MO Local', _arrived:_t-17.2 },
+    { event:'GROUP VOICE TX END',   system:'MO-PEER',   ts:1,
+      src:3112002, src_alias:'KD0XYZ', tgid:9, tgid_alias:'KS Statewide',
+      duration:8.7, _arrived:_t-129 },
+    { event:'GROUP VOICE END',      system:'KS-MASTER', ts:1,
+      src:3112002, src_alias:'KD0XYZ', peer:3112002, peer_alias:'KD0XYZ',
+      tgid:9, tgid_alias:'KS Statewide', duration:8.7, _arrived:_t-129 },
+    { event:'GROUP VOICE TX START', system:'MO-PEER',   ts:1,
+      src:3112002, src_alias:'KD0XYZ', tgid:9, tgid_alias:'KS Statewide', _arrived:_t-137.7 },
+    { event:'GROUP VOICE START',    system:'KS-MASTER', ts:1,
+      src:3112002, src_alias:'KD0XYZ', peer:3112002, peer_alias:'KD0XYZ',
+      tgid:9, tgid_alias:'KS Statewide', _arrived:_t-137.7 },
+  ];
+
+  setConn(true);
+  renderAll();
+  // No WebSocket in demo mode — setInterval ticker still runs for live timers.
 } else {
   connect();
 }
