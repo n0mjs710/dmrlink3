@@ -42,11 +42,11 @@
   #log{background:#0b1220;border:1px solid var(--border);border-radius:8px;height:230px;overflow-y:auto;padding:8px 10px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;line-height:1.5}
   #log .start{color:#7dd3fc}#log .end{color:#86efac}#log .ts{color:#64748b}
   /* system-level TS activity pills */
-  .sys-hdr{margin:12px 0 4px}
-  .peers-hdr{display:flex;justify-content:space-between;align-items:center;margin:4px 0 6px}
-  .peers-hdr h3{margin:0}
-  .slot-pills{display:flex;gap:8px;flex-shrink:0;margin-left:16px}
-  .slot-col{display:flex;flex-direction:column;align-items:center}
+  .sys-hdr{display:flex;justify-content:space-between;align-items:center;margin:12px 0 4px}
+  .sys-hdr h3{margin:0}
+  .peers-hdr{margin:4px 0 6px}
+  .slot-pills{display:flex;gap:8px;flex-shrink:0}
+  .slot-col{display:flex;flex-direction:column;align-items:flex-start}
   .slot-label{font-size:10px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px}
   .spill{width:280px;border-radius:6px;padding:5px 10px;font-size:12px;border:1px solid var(--border);box-sizing:border-box}
   .spill-top{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.4}
@@ -155,24 +155,22 @@ function renderSystems(){
     const s    = ST.systems[n];
     const mode = s.MODE||'PEER';
 
-    h += '<div class="sys-hdr">'
-       + '<h3><span class="sysname">'+esc(n)+'</span>'
-       + ' <span class="pill '+(mode==='MASTER'?'master':'peer')+'">'+esc(mode)+'</span>'
-       + ' &nbsp;<span class="sub">Radio ID: '+esc(s.RADIO_ID)+'  |  '+esc(s.IP||'0.0.0.0')+':'+esc(s.PORT)+'</span></h3>'
-       + '</div>';
-
     // Peer table — identical columns for both MASTER and PEER mode systems
     const peers = s.PEERS||{};
     const pids  = Object.keys(peers);
     const ms    = mode === 'PEER' ? (s.MASTER||{}) : null;
     const totalCount = pids.length + (ms ? 1 : 0);
-    h += '<div class="peers-hdr">'
-       + '<h3>Peers in IPSC ('+totalCount+')</h3>'
+
+    h += '<div class="sys-hdr">'
+       + '<h3><span class="sysname">'+esc(n)+'</span>'
+       + ' <span class="pill '+(mode==='MASTER'?'master':'peer')+'">'+esc(mode)+'</span>'
+       + ' &nbsp;<span class="sub">Radio ID: '+esc(s.RADIO_ID)+'  |  '+esc(s.IP||'0.0.0.0')+':'+esc(s.PORT)+'</span></h3>'
        + '<div class="slot-pills">'
        + '<div class="slot-col"><div class="slot-label">TS1</div>'+sysTsPill(n,1)+'</div>'
        + '<div class="slot-col"><div class="slot-label">TS2</div>'+sysTsPill(n,2)+'</div>'
        + '</div>'
        + '</div>';
+    h += '<div class="peers-hdr"><h3>Peers in IPSC ('+totalCount+')</h3></div>';
 
     if(!totalCount){
       h += '<div class="empty" style="margin-bottom:10px">No peers</div>';
