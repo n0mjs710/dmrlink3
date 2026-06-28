@@ -56,7 +56,6 @@
   .spill.hang{background:#0d2137;color:#7dd3fc;border-color:#075985}
   .brand{display:flex;align-items:center;gap:14px}
   .brand .logo{height:46px;width:auto;display:block}
-  .self-row td{background:#1a2744;font-style:italic}
 </style>
 </head>
 <body>
@@ -146,7 +145,7 @@ function renderSystems(){
     h += '<div class="sys-hdr">'
        + '<h3><span class="sysname">'+esc(n)+'</span>'
        + ' <span class="pill '+(mode==='MASTER'?'master':'peer')+'">'+esc(mode)+'</span>'
-       + '</h3>'
+       + ' &nbsp;<span class="sub">Radio ID: '+esc(s.RADIO_ID)+'  |  '+esc(s.IP||'0.0.0.0')+':'+esc(s.PORT)+'</span></h3>'
        + '</div>';
 
     // Peer table — identical columns for both MASTER and PEER mode systems
@@ -159,17 +158,12 @@ function renderSystems(){
        + '<div class="slot-pills">'+sysTsPill(n,1)+sysTsPill(n,2)+'</div>'
        + '</div>';
 
-    {
+    if(!totalCount){
+      h += '<div class="empty" style="margin-bottom:10px">No peers</div>';
+    } else {
       h += '<table><tr><th>Radio ID</th><th>Address</th><th>Status</th></tr>';
 
-      // Local system (self) always appears first so all columns stay aligned.
-      h += '<tr class="self-row">'
-         + '<td class="mono">'+esc(s.RADIO_ID)+' <span class="pill">self</span></td>'
-         + '<td class="mono">'+esc(s.IP||'0.0.0.0')+':'+esc(s.PORT)+'</td>'
-         + '<td><span class="dot ok"></span><span class="status-ok">Active</span></td>'
-         + '</tr>';
-
-      // Inject master as next row when we are a PEER — the master does not
+      // Inject master as first row when we are a PEER — the master does not
       // include itself in the peer list it sends us, so we synthesise the row.
       if(ms){
         const mrid = ms.RADIO_ID != null ? ms.RADIO_ID : '—';
