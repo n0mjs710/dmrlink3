@@ -148,6 +148,13 @@ The dashboard connects to this feed and serves a browser UI at the configured
 `WEB_PORT`. See `dashboard/config_sample.py` and [INSTALL.md](INSTALL.md) for
 setup instructions.
 
+**Demo mode** — append `?demo` to the dashboard URL (e.g. `http://localhost:8080/?demo`)
+to load a static pre-populated scenario showing all visual elements: MASTER and PEER
+systems with connected repeaters, a TRUNK endpoint with active streams, active calls
+bridged coherently across systems, a slot in group-hangtime, and a populated call log.
+No dmrlink3 connection is required. This is useful for understanding what the dashboard
+looks like under normal operating conditions before any traffic has been seen.
+
 **Dashboard features:**
 - Live IPSC system status: peer table with radio IDs, addresses, and connection state
 - Per-system **TS1/TS2 activity pills** showing real-time slot state:
