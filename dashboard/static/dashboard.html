@@ -34,6 +34,8 @@
   .pill{display:inline-block;padding:2px 7px;border-radius:10px;font-size:10px;border:1px solid var(--border);color:var(--muted)}
   .pill.master{border-color:var(--accent);color:var(--accent)}
   .pill.peer{border-color:#818cf8;color:#818cf8}
+  .pill.trunk{border-color:#a78bfa;color:#a78bfa}
+  .trunk-streams{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}
   .status-ok{color:#4ade80;font-weight:600}
   .status-bad{color:#f87171;font-weight:600}
   .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;vertical-align:middle}
@@ -74,13 +76,13 @@
     <div id="conn" class="badge down">DMRlink3: connecting…</div>
   </header>
 
-  <section><h2>IPSC Systems</h2><div id="systems"></div></section>
+  <section><h2>Systems</h2><div id="systems"></div></section>
   <section><h2>Conference Bridges</h2><div id="bridges"></div></section>
   <section><h2>Call Log</h2><div id="log"></div></section>
 </div>
 
 <script>
-const ST = { systems:{}, bridges:{}, active:{}, tx_active:{}, hang:{}, log:[], dmrlink:false };
+const ST = { systems:{}, bridges:{}, active:{}, tx_active:{}, hang:{}, trunk_streams:{}, log:[], dmrlink:false };
 const STALE = 60000;
 
 const el  = id => document.getElementById(id);
@@ -145,14 +147,48 @@ function sysTsPill(sys, ts){
        + '</div>';
 }
 
+// ---- trunk stream pill (identical spill card, no slot label) ----
+
+function trunkStreamPill(stream){
+  const src = stream.src_alias  ? esc(stream.src_alias)  : '<span class="mono">'+esc(String(stream.src||''))+'</span>';
+  const tg  = stream.tgid_alias ? esc(stream.tgid_alias) : '<span class="mono">'+esc(String(stream.tgid||''))+'</span>';
+  const sid = esc(String(stream.stream_id||'').slice(0,8));
+  const elapsed = '<span class="js-dur" data-start="'+esc(String(stream._arrived||0))+'">'+dur(Date.now()/1000-(stream._arrived||0))+'</span>';
+  const cls = stream.direction==='rx' ? 'rx' : 'tx';
+  const dir = stream.direction==='rx' ? 'RX' : 'TX';
+  return '<div class="spill '+cls+'">'
+       + '<div class="spill-top">'+src+' → '+tg+'</div>'
+       + '<div class="spill-bot">'+dir+' · Group Voice · <span class="mono">'+sid+'</span> · '+elapsed+'</div>'
+       + '</div>';
+}
+
 // ---- renderers ----
+
+function renderTrunkBlock(n, s){
+  const streams = Object.values(ST.trunk_streams).filter(t => t.system===n);
+  let h = '<div class="sys-hdr">'
+        + '<h3><span class="sysname">'+esc(n)+'</span>'
+        + ' <span class="pill trunk">TRUNK</span>'
+        + ' &nbsp;<span class="sub">peer '+esc(s.PEER_IP||'?')+':'+esc(String(s.PEER_PORT||'?'))+'</span></h3>'
+        + '</div>';
+  h += '<div class="peers-hdr"><h3>Active Streams ('+streams.length+')</h3></div>';
+  h += '<div class="trunk-streams">';
+  if(!streams.length){
+    h += '<div class="spill idle"><div class="spill-top">&#8212; no active streams &#8212;</div><div class="spill-bot">&nbsp;</div></div>';
+  } else {
+    for(const st of streams) h += trunkStreamPill(st);
+  }
+  h += '</div>';
+  return h;
+}
 
 function renderSystems(){
   const names = Object.keys(ST.systems);
-  if(!names.length){ el('systems').innerHTML='<div class="empty">No systems (dmrlink3 not connected or no IPSC networks enabled)</div>'; return; }
+  if(!names.length){ el('systems').innerHTML='<div class="empty">No systems (dmrlink3 not connected or no networks enabled)</div>'; return; }
   let h='';
   for(const n of names){
     const s    = ST.systems[n];
+    if(s.SYSTEM_TYPE==='TRUNK'){ h += renderTrunkBlock(n, s); continue; }
     const mode = s.MODE||'PEER';
 
     // Peer table — identical columns for both MASTER and PEER mode systems
@@ -346,7 +382,7 @@ function connect(){
     }
     else if(m.type==='dmrlink'){
       setConn(m.connected);
-      if(!m.connected){ ST.systems={}; ST.bridges={}; ST.active={}; ST.tx_active={}; ST.hang={}; renderAll(); }
+      if(!m.connected){ ST.systems={}; ST.bridges={}; ST.active={}; ST.tx_active={}; ST.hang={}; ST.trunk_streams={}; renderAll(); }
     }
     else if(m.type==='config'){
       ST.systems = m.systems||{};
@@ -365,6 +401,20 @@ function connect(){
     el('conn').textContent = 'DMRlink3: dashboard offline';
     setTimeout(connect, 2000);
   };
+}
+if(new URLSearchParams(location.search).has('demo')){
+  const _now = Date.now()/1000;
+  ST.systems['DEMO-TRUNK'] = {
+    SYSTEM_TYPE:'TRUNK', RADIO_ID:'3129100',
+    IP:'0.0.0.0', PORT:50200, PEER_IP:'198.51.100.1', PEER_PORT:50200,
+  };
+  ST.trunk_streams = {
+    'ab12cd34':{ system:'DEMO-TRUNK', stream_id:'ab12cd34', direction:'rx', src:3112000, src_alias:'W0ABC',  tgid:9,    tgid_alias:'KS Statewide',   _arrived:_now-47 },
+    'ef56ab78':{ system:'DEMO-TRUNK', stream_id:'ef56ab78', direction:'tx', src:3161234, src_alias:null,     tgid:3100, tgid_alias:'BrandMeister USA',_arrived:_now-12 },
+    'cd90ef12':{ system:'DEMO-TRUNK', stream_id:'cd90ef12', direction:'rx', src:3188765, src_alias:'KD0XYZ', tgid:31,   tgid_alias:'US Nationwide',   _arrived:_now-8  },
+    '1234abcd':{ system:'DEMO-TRUNK', stream_id:'1234abcd', direction:'tx', src:3155555, src_alias:'N0MJS',  tgid:31,   tgid_alias:'US Nationwide',   _arrived:_now-3  },
+  };
+  renderSystems();
 }
 connect();
 </script>
