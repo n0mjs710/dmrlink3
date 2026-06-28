@@ -256,6 +256,9 @@ def config_reports(_config, _factory):
 # ---------------------------------------------------------------------------
 
 def build_aliases(_config):
+    if not _config['ALIASES'].get('USE_ALIASES', True):
+        logger.info('ID ALIAS MAPPER: disabled in configuration')
+        return {}, {}, {}, {}
     if _config['ALIASES']['TRY_DOWNLOAD']:
         result = try_download(_config['ALIASES']['PATH'], _config['ALIASES']['PEER_FILE'],
                               _config['ALIASES']['PEER_URL'], _config['ALIASES']['STALE_TIME'])
