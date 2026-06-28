@@ -56,6 +56,10 @@
   .spill.hang{background:#0d2137;color:#7dd3fc;border-color:#075985}
   .brand{display:flex;align-items:center;gap:14px}
   .brand .logo{height:46px;width:auto;display:block}
+  .sys-table{table-layout:fixed}
+  .sys-table th:nth-child(1),.sys-table td:nth-child(1){width:22%}
+  .sys-table th:nth-child(2),.sys-table td:nth-child(2){width:42%}
+  .sys-table th:nth-child(3),.sys-table td:nth-child(3){width:36%}
 </style>
 </head>
 <body>
@@ -161,7 +165,7 @@ function renderSystems(){
     if(!totalCount){
       h += '<div class="empty" style="margin-bottom:10px">No peers</div>';
     } else {
-      h += '<table><tr><th>Radio ID</th><th>Address</th><th>Status</th></tr>';
+      h += '<table class="sys-table"><tr><th>Radio ID</th><th>Address</th><th>Status</th></tr>';
 
       // Inject master as first row when we are a PEER — the master does not
       // include itself in the peer list it sends us, so we synthesise the row.
