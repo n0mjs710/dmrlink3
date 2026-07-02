@@ -83,7 +83,7 @@
 
 <script>
 const ST = { systems:{}, bridges:{}, active:{}, tx_active:{}, hang:{}, trunk_streams:{}, log:[], dmrlink:false };
-const STALE = 60000;
+const STALE = 300000;   // backstop: drop an active call this many ms after START if no END arrives (well above amateur TOT)
 
 const el  = id => document.getElementById(id);
 const esc = s  => (s==null?'':String(s)).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));

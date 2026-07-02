@@ -66,7 +66,11 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger('dmrdash')
 
 # Drop stale "active" calls this many seconds after START if no END arrives.
-CALL_STALE = 60
+# Backstop only: a dropped feed already clears active calls on disconnect, so
+# this just guards against a lost/never-sent terminator on a still-connected
+# feed. Keep it well above any real transmission (amateur TOT is ~3 min) so
+# legitimate long calls are never clipped mid-stream.
+CALL_STALE = 300
 
 
 # ---- alias resolution --------------------------------------------------------
