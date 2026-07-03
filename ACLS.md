@@ -63,20 +63,7 @@ So for a registration ACL:
   reject every other login."*
 * `DENY:311999` means *"reject peer 311999, accept every other peer."*
 
-This is verified in `acl_check()` — a match returns the ACTION, and a non-match
-returns `not action`:
-
-```python
-def acl_check(_id, _acl):
-    id = int_id(_id)
-    action, singles, starts, ends = _acl
-    if id in singles:
-        return action           # listed  -> the ACTION
-    i = bisect.bisect_right(starts, id) - 1
-    if i >= 0 and id <= ends[i]:
-        return action           # listed  -> the ACTION
-    return not action           # unlisted -> the OPPOSITE
-```
+A listed ID gets the ACTION; an unlisted ID gets the opposite.
 
 **Rule of thumb:** use `PERMIT:` when you run a closed IPSC network and want only
 a known list of repeaters to join. Use `DENY:` when you want an otherwise-open
@@ -98,15 +85,8 @@ per-system subscriber ACLs. Its `process_acls()` wires up exactly two:
 
 A registration ACL only makes sense on a system where **DMRlink3 is the IPSC
 master** (`MASTER_PEER: True`). When a peer sends a registration request,
-`master_reg_req()` checks it:
-
-```python
-def master_reg_req(self, _data, _peerid, _host, _port):
-    if not acl_check(_peerid, self._local['REG_ACL']):
-        logger.warning('(%s) Peer Registration ***REJECTED BY ACL***: ...')
-        return
-    ...
-```
+DMRlink3 checks the peer's ID against `REG_ACL` and, if it is denied, refuses the
+registration and logs `Peer Registration ***REJECTED BY ACL***`.
 
 If DMRlink3 is a **peer** on someone else's master (`MASTER_PEER: False`), the
 `REG_ACL` is ignored — a peer does not decide who else joins the master's
@@ -122,16 +102,9 @@ Registration IDs are peer IDs and are validated against the full 32-bit range
 
 ### 3b. `SUB_ACL` — global subscriber gate on the bridge
 
-The bridge (`bridge.py`, `group_voice()` and its private-call counterpart) checks
-the **global** `SUB_ACL` against the source subscriber before propagating a call:
-
-```python
-def group_voice(self, _src_sub, _dst_group, _ts, _end, _peerid, _data):
-    if not acl_check(_src_sub, self._CONFIG['GLOBAL']['SUB_ACL']):
-        logger.warning('(%s) Group Voice ***REJECTED BY ACL*** From: ...')
-        return
-    ...
-```
+When the bridge is running, it checks the **global** `SUB_ACL` against the source
+subscriber before propagating a call, and drops the call (logging
+`***REJECTED BY ACL***`) if the subscriber is denied.
 
 There is only **one** `SUB_ACL`, in `[GLOBAL]`. It is checked against subscriber
 IDs (`1 … 16776415`, `const.ID_MAX`). Set it to `PERMIT:ALL` if you don't want
@@ -204,44 +177,26 @@ REG_ACL: PERMIT:311000-311099,311100-311199,311200-311299,312500
 
 ---
 
-## 5. How matching actually works (for the curious)
-
-At startup, `acl_build()` turns each ACL string into a compact structure:
-
-```
-(action, frozenset_of_single_ids, sorted_range_starts, sorted_range_ends)
-```
-
-* **Single IDs** go into a `frozenset` → membership test is O(1).
-* **Ranges** are sorted and merged into disjoint spans by `merge_ranges()`
-  (adjacent ranges, e.g. `1-5` and `6-10`, are fused into `1-10`), then stored as
-  two parallel tuples so `acl_check()` finds any match with **one binary search**
-  (`bisect`), i.e. O(log n).
-
-So a check is one hash-set lookup plus one binary search over an already-minimized
-range list.
-
----
-
 ## Performance
 
 **Short version: on an IPSC master, use a `REG_ACL`. It costs almost nothing.**
 
-* Parsing/merging happens **once, at startup** — never on the hot path.
+* All of the work of reading and organizing your ACLs happens **once, when
+  DMRlink3 starts** — not while traffic is flowing.
 * Registration is a **rare event** (a peer registers, then periodically
   re-registers on the ping interval). A `REG_ACL` check runs a handful of times
   per peer per interval — utterly negligible, and it protects your network from
   unwanted peers.
-* The global `SUB_ACL` runs once per call on the bridge: one set lookup plus one
-  binary search. For *n* merged ranges the search is about **log₂(n)**
-  comparisons — 1,000 ranges is ~10 comparisons. You won't measure it.
-* Adjacent/overlapping ranges are **merged**, so a large-looking config often
-  reduces to a few spans in memory.
+* The global `SUB_ACL` is checked once per call on the bridge, and it stays fast
+  no matter how long your list gets — a thousand entries is checked essentially as
+  quickly as ten. You won't measure it.
+* Runs of consecutive IDs are **combined** internally, so a large-looking config
+  often takes very little memory.
 
 Practical guidance:
 
-* Prefer ranges over enumerating many consecutive IDs — less typing, smaller
-  memory, same speed.
+* Prefer ranges (`311000-311099`) over listing many consecutive IDs — less
+  typing, smaller memory, same speed.
 * A registration ACL is the single highest-value, lowest-cost ACL you can set on
   a master. There is no performance reason to leave it at `PERMIT:ALL` if you
   actually want to restrict who joins.
