@@ -2,21 +2,20 @@
 
 **PURPOSE:** Connect multiple Motorola MOTOTRBO IPSC (IP Site Connect) networks together, bridge
 talkgroup traffic between them, and provide a live web dashboard for monitoring.
-DMRlink3 is also useful for understanding and troubleshooting IPSC, or as a
-starting point for writing custom IPSC applications.
+DMRlink3 is also useful for understanding and troubleshooting IPSC, with a portable
+protocol stack that may be used as a starting point for writing custom IPSC applications.
 
 **ORIGIN:** DMRlink3 is a Python 3 / asyncio port of
-[dmrlink](https://github.com/n0mjs710/dmrlink) (Python 2 / Twisted), aligned
-in style with the [HBlink3](https://github.com/n0mjs710/hblink3) 2026_cleanup
-branch. Only the core files and the conference-bridge application are carried
-forward; the retired sample applications are not included.
+[dmrlink](https://github.com/n0mjs710/dmrlink) (Python 2 / Twisted), aligned in style with
+the [HBlink3](https://github.com/n0mjs710/hblink3) . Only the core files and the 
+conference-bridge application are carried forward; the retired sample applications are not included.
 
 ---
 
 ### Protocol Background
 
-**IMPACT:** Potential concern from Motorola Solutions, as IPSC is a proprietary
-protocol.
+**IMPACT:** IPSC is a proprietary protocol ownned by Motorola Solutions, impemented here based
+on wire captures of traffic between IPSC systems.
 
 **METHOD:** Reverse engineering by pattern matching and process of elimination.
 
@@ -32,7 +31,8 @@ terms may be used. These are owned and held by their respective owners.
 
 **PRE-REQUISITE KNOWLEDGE:**
 This document assumes the reader is familiar with the concepts presented in the
-Motorola Solutions™, Inc. MOTOTRBO™ Systems Planner.
+Motorola Solutions™, Inc. MOTOTRBO™ Systems Planner, Linux CLI and basic
+ability to work with Python.
 
 ---
 
@@ -44,6 +44,7 @@ differs only in that it coordinates joins from newly registering devices and
 distributes the authoritative peer list. Once a new peer has registered and
 received the peer list, it establishes direct UDP connections to every other
 peer and exchanges keep-alives and traffic with each of them independently.
+IPSC mimics the functions of IP multicast networking in a unicast environment.
 
 This means:
 - Voice and data packets flow **directly between peers**, not through the master.
@@ -51,6 +52,9 @@ This means:
 - Two DMRlink3 instances connected to each other with no other peers form a
   full-duplex trunk and can carry as many simultaneous packet streams as they
   have bandwidth for.
+- As a consequence, IPSC endpoints can lose partial connectivity with each other and
+  the the remaining endpoints that can communicate with each other continue to.
+  This must be understood and is a common point of confusion during operation.
 
 **CONVENTIONS:**
 `PEER → MASTER` denotes communication from the peer to the master. The initiator
@@ -65,8 +69,8 @@ else. It handles registration, keep-alives, peer-list management, and packet
 dispatch. On its own it only logs traffic; applications are written by
 subclassing the `IPSC` class and overriding the packet-type callbacks.
 
-**Always verify that `dmrlink.py` runs and connects cleanly before working with
-application files.** Set `LOG_LEVEL: DEBUG` and watch the output.
+**Always verify that `dmrlink.py` runs and connects cleanly first.** 
+Set `LOG_LEVEL: DEBUG` and watch the output.
 
 `bridge.py` is the conference-bridge router. It subclasses `IPSC` and bridges
 voice traffic between IPSC networks according to a rule file (`bridge_rules.py`).
@@ -125,8 +129,9 @@ active system on the same bridge.
 - Contention handling: group-hangtime and timeslot-clear-time rules prevent
   simultaneous overlapping calls from being bridged destructively
 - Trunk bypass: systems listed in `TRUNKS` skip contention handling entirely —
-  useful when two DMRlink3 instances are the only devices on an IPSC and you
-  want full-duplex trunking
+  useful when two DMRlink3 instances are connected to each other as it can pass
+  an arbitrary number of traffic flows, without any "slot"-based locking. or
+  contention handling.
 - Subscriber ACL: optional `sub_acl.py` can PERMIT or DENY specific radio IDs
 
 ---
@@ -174,14 +179,16 @@ The configuration file is in `.ini` format and is self-documented in
 
 - **Do not enable features you do not understand.** IPSC exposes options that
   DMRlink3 does not implement (XNL/XCMP, for example). Enabling them may confuse
-  other devices on your IPSC or produce unpredictable results.
-- DMRlink3 **cannot brick a repeater or subscriber** because it does not
+  other devices on your IPSC or produce unpredictable results. They remain
+  included as hooks for future handling.
+- DMRlink3 **cannot brick a repeater or subscriber radio** because it does not
   implement XNL/XCMP, through which those dangerous operations flow.
 - `PORT` must be unique per IPSC system stanza.
 - Leave `IP:` blank to bind all interfaces; specify it only when DMRlink3 bridges
   between private/VPN and public networks.
 - `RCM: True` and `CON_APP: True` are both required if you want Repeater Call
-  Monitor packets forwarded to reporting clients.
+  Monitor packets forwarded to reporting clients. This is another feature that
+  only works with additinoal softaware or hblink.py-based applications.
 
 ---
 
@@ -195,15 +202,25 @@ See [INSTALL.md](INSTALL.md).
 
 ### This Software Is Not a Commercial Product
 
-DMRlink3 is not an out-of-the-box replacement for c-Bridge, SmartPTT, GenWatch,
-RDAC, or similar commercial products. It does not do everything those products
-do, and will likely never be something you can "just run" without understanding
-what is happening under the hood. If you want a commercial-grade IPSC bridge,
-buy one — they work great. If you want to understand IPSC, write your own
-application on top of it, or need a capable open-source bridge without
-commercial overhead, then DMRlink3 might be right for you.
+DMRlink3 is not an out-of-the-box replacement for similar commercial products. 
+If you want a commercial-grade IPSC bridge, buy one — they work great. using 
+DMRlink3 requires a little bit of work, though significant effort has gone into
+simplifying installation and operation in this re-write.
 
-Using DMRlink3 requires a basic understanding of Python 3.
+Using DMRlink3 requires a basic understanding of Python 3, Linux CLI and basic
+systems administration.
+
+### No Support Is Provided
+
+This is not commercial software. It is provided free of charge. The author(s)
+received no compensation for creating and maintaining it. Countless hours over
+many years have gone into the this. If you have problems, the author will try
+to help if possible, please have no expectations for support. There is no online
+group, such as DVSwitch or groups.io that is an "official" outlet for information.
+The only definitive source of information is me. Beware of others claiming to
+be authoritative. User-based mutual support is great, and I'm all for it. But
+please understand, this is what they are, and I have not sanctioned anyone to be
+the "home" of my software packages.
 
 ---
 
