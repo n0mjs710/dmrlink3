@@ -62,6 +62,17 @@ try:
 except ImportError:
     FILTER_COUNTRIES = None
 
+try:
+    from config import LAST_HEARD, LAST_HEARD_COUNT
+except ImportError:
+    LAST_HEARD = 'open'
+    LAST_HEARD_COUNT = 10
+
+try:
+    from config import SYSTEM_PEERS
+except ImportError:
+    SYSTEM_PEERS = 'open'
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 logger = logging.getLogger('dmrdash')
 
@@ -301,7 +312,11 @@ app = FastAPI(lifespan=lifespan)
 async def index():
     with open(os.path.join(STATIC, 'dashboard.html'), encoding='utf-8') as f:
         html = f.read()
-    return html.replace('{{REPORT_NAME}}', REPORT_NAME).replace('{{LOGO_HTML}}', LOGO_HTML)
+    return (html.replace('{{REPORT_NAME}}', REPORT_NAME)
+                .replace('{{LOGO_HTML}}', LOGO_HTML)
+                .replace('{{LAST_HEARD}}', str(LAST_HEARD))
+                .replace('{{LAST_HEARD_COUNT}}', str(LAST_HEARD_COUNT))
+                .replace('{{SYSTEM_PEERS}}', str(SYSTEM_PEERS)))
 
 @app.get('/logo')
 async def serve_logo():

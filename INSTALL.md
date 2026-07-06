@@ -92,6 +92,10 @@ Edit `dashboard/config.py`:
 - `DMRLINK_IP` / `DMRLINK_PORT` — point at dmrlink3's `REPORT_PORT`.
 - `WEB_PORT` — port the dashboard web server listens on (default `8080`).
 - `PATH` — directory containing alias files (`peer_ids.json`, etc.).
+- `LAST_HEARD` / `LAST_HEARD_COUNT` — default state (`'open'`/`'closed'`/`'off'`)
+  and length of the Last Heard table.
+- `SYSTEM_PEERS` — default state (`'open'`/`'closed'`) of each system's
+  collapsible peer list; `'closed'` gives a compact view for many-system installs.
 
 ---
 

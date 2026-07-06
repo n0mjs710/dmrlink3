@@ -161,7 +161,8 @@ No dmrlink3 connection is required. This is useful for understanding what the da
 looks like under normal operating conditions before any traffic has been seen.
 
 **Dashboard features:**
-- Live IPSC system status: peer table with radio IDs, addresses, and connection state
+- **Last Heard** — most-recent unique callers (user, call type, source peer, timeslot, talkgroup, and when), derived live from the call log; collapsible, with its open/closed state remembered per-browser (`LAST_HEARD` / `LAST_HEARD_COUNT`)
+- Live IPSC system status: peer table with radio IDs, addresses, and connection state. Each system's peer list is collapsible with the **Show/Hide Peers** button — the system header and TS1/TS2 activity pills stay visible, so live traffic is always in view even when collapsed. Default state is set by `SYSTEM_PEERS` (`'open'`/`'closed'`) and per-system choices are remembered per-browser
 - Per-system **TS1/TS2 activity pills** showing real-time slot state:
   - **RX** (green) — receiving a call from a peer, with source radio, peer ID, TGID, and elapsed time
   - **TX** (orange) — forwarding a bridged call, with originating radio, source peer, TGID, and elapsed time

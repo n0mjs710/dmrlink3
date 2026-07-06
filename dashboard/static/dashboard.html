@@ -64,6 +64,13 @@
   .sys-table th:nth-child(1),.sys-table td:nth-child(1){width:22%}
   .sys-table th:nth-child(2),.sys-table td:nth-child(2){width:42%}
   .sys-table th:nth-child(3),.sys-table td:nth-child(3){width:36%}
+  .lh-head{display:flex;align-items:center;gap:10px}
+  .toggle-btn{cursor:pointer;user-select:none;display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:var(--accent);background:var(--panel2);border:1px solid var(--border);border-radius:6px;padding:3px 10px;text-transform:none;letter-spacing:0}
+  .toggle-btn:hover{border-color:var(--accent)}
+  .toggle-btn .caret{font-size:11px;line-height:1}
+  #lastHeardBody.hidden{display:none}
+  .peers-hdr .toggle-btn .sub{font-weight:400}
+  .sys-block.collapsed .sys-table,.sys-block.collapsed .empty{display:none}
 </style>
 </head>
 <body>
@@ -76,6 +83,7 @@
     <div id="conn" class="badge down">DMRlink3: connecting…</div>
   </header>
 
+  <section id="lastHeardSection"><h2 class="lh-head">Last Heard <span id="lastHeardToggle" class="toggle-btn"><span class="caret">▾</span><span class="toggle-label">Hide</span></span></h2><div id="lastHeardBody"><div id="lastHeard"></div></div></section>
   <section><h2>Systems</h2><div id="systems"></div></section>
   <section><h2>Conference Bridges</h2><div id="bridges"></div></section>
   <section><h2>Call Log</h2><div id="log"></div></section>
@@ -84,6 +92,9 @@
 <script>
 const ST = { systems:{}, bridges:{}, active:{}, tx_active:{}, hang:{}, trunk_streams:{}, log:[], dmrlink:false };
 const STALE = 300000;   // backstop: drop an active call this many ms after START if no END arrives (well above amateur TOT)
+const LAST_HEARD_CFG   = '{{LAST_HEARD}}';                    // 'open' | 'closed' | 'off'
+const LAST_HEARD_COUNT = parseInt('{{LAST_HEARD_COUNT}}', 10) || 10;
+const SYSTEM_PEERS_CFG = '{{SYSTEM_PEERS}}';                  // 'open' | 'closed' — default state for per-system peer lists
 
 const el  = id => document.getElementById(id);
 const esc = s  => (s==null?'':String(s)).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -182,6 +193,27 @@ function renderTrunkBlock(n, s){
   return h;
 }
 
+// ---- per-system peer-list collapse (persisted per browser; SYSTEM_PEERS sets the default) ----
+function sysCollapsedStore(){ try{ return JSON.parse(localStorage.getItem('dmrl_sys_collapsed')||'{}'); }catch(e){ return {}; } }
+function sysIsCollapsed(n){
+  const st = sysCollapsedStore();
+  return Object.prototype.hasOwnProperty.call(st, n) ? !!st[n] : (SYSTEM_PEERS_CFG==='closed');
+}
+function sysSetCollapsed(n, val){
+  const st = sysCollapsedStore(); st[n] = val;
+  localStorage.setItem('dmrl_sys_collapsed', JSON.stringify(st));
+}
+function initSystemsCollapse(){
+  // Delegated so it survives renderSystems() rebuilding #systems on every event.
+  el('systems').addEventListener('click', ev=>{
+    const btn = ev.target.closest('.peers-toggle'); if(!btn) return;
+    const block = btn.closest('.sys-block'); if(!block) return;
+    const n = block.dataset.sys;
+    sysSetCollapsed(n, !sysIsCollapsed(n));
+    renderSystems();
+  });
+}
+
 function renderSystems(){
   const names = Object.keys(ST.systems);
   if(!names.length){ el('systems').innerHTML='<div class="empty">No systems (dmrlink3 not connected or no networks enabled)</div>'; return; }
@@ -206,7 +238,11 @@ function renderSystems(){
        + '<div class="slot-col"><div class="slot-label">TS2</div>'+sysTsPill(n,2)+'</div>'
        + '</div>'
        + '</div>';
-    h += '<div class="peers-hdr"><h3>Peers in IPSC ('+totalCount+')</h3></div>';
+    const collapsed = sysIsCollapsed(n);
+    h += '<div class="sys-block'+(collapsed?' collapsed':'')+'" data-sys="'+esc(n)+'">';
+    h += '<div class="peers-hdr"><span class="toggle-btn peers-toggle" title="Show or hide this system’s peers">'
+       + '<span class="caret">'+(collapsed?'▸':'▾')+'</span>'+(collapsed?'Show Peers':'Hide Peers')
+       + ' <span class="sub">('+totalCount+')</span></span></div>';
 
     if(!totalCount){
       h += '<div class="empty" style="margin-bottom:10px">No peers</div>';
@@ -263,6 +299,7 @@ function renderSystems(){
       }
       h += '</table>';
     }
+    h += '</div>';   // close .sys-block (collapsible peer list)
   }
   el('systems').innerHTML = h;
 }
@@ -311,6 +348,62 @@ function logRow(e){
 }
 function renderLog(){ el('log').innerHTML = ST.log.map(logRow).join(''); }
 
+// ---------- last heard ----------
+// Most-recent unique callers, derived from the ingress (non-TX) call log — no
+// server state of its own. Deduped by source radio ID, newest first.
+// The call type is carried inside the compound 'event' string
+// (e.g. "GROUP VOICE START"); strip the direction/action tokens to label it.
+function callTypeLabel(ev){
+  if(!ev) return '';
+  const t = ev.replace(/\s*(TX\s+)?(START|END)\s*$/i, '').trim();
+  return t.split(/\s+/).map(w => w ? w[0].toUpperCase()+w.slice(1).toLowerCase() : w).join(' ');
+}
+function lhActiveSrc(src){ for(const k in ST.active){ if(String(ST.active[k].src)===String(src)) return true; } return false; }
+function renderLastHeard(){
+  const box = el('lastHeard'); if(!box) return;
+  const seen = {}, rows = [];
+  for(const e of ST.log){
+    if((e.event||'').includes('TX')) continue;   // skip retransmit legs; keep true originators
+    const id = e.src==null ? '' : String(e.src);
+    if(!id || seen[id]) continue;
+    seen[id] = 1; rows.push(e);
+    if(rows.length >= LAST_HEARD_COUNT) break;
+  }
+  if(!rows.length){ box.innerHTML = '<div class="empty">No calls heard yet</div>'; return; }
+  let h = '<table><tr><th>User</th><th>Type</th><th>Source</th><th>TS</th><th>Talkgroup</th><th>When</th></tr>';
+  for(const e of rows){
+    const t = e._arrived||0;                     // seconds
+    const when = lhActiveSrc(e.src)
+      ? '<span class="status-ok">Active</span>'
+      : '<span class="js-lh mono" data-t="'+t+'">'+dur(Date.now()/1000 - t)+' ago</span>';
+    h += '<tr><td>'+idName(e.src_alias,e.src)+'</td>'
+       + '<td class="sub">'+esc(callTypeLabel(e.event))+'</td>'
+       + '<td class="mono sub">'+(e.peer!=null ? idName(e.peer_alias,e.peer) : esc(e.system||''))+'</td>'
+       + '<td class="mono">TS'+esc(e.ts||'?')+'</td>'
+       + '<td>'+idName(e.tgid_alias,e.tgid)+'</td>'
+       + '<td>'+when+'</td></tr>';
+  }
+  box.innerHTML = h+'</table>';
+}
+function setLastHeardOpen(open){
+  el('lastHeardBody').classList.toggle('hidden', !open);
+  const t = el('lastHeardToggle');
+  t.querySelector('.caret').textContent = open ? '▾' : '▸';
+  t.querySelector('.toggle-label').textContent = open ? 'Hide' : 'Show';
+}
+function initLastHeard(){
+  const sec = el('lastHeardSection'); if(!sec) return;
+  if(LAST_HEARD_CFG==='off'){ sec.style.display='none'; return; }
+  const saved = localStorage.getItem('lastHeardOpen');       // per-browser override wins over config default
+  setLastHeardOpen(saved==null ? (LAST_HEARD_CFG!=='closed') : (saved==='1'));
+  el('lastHeardToggle').addEventListener('click', ()=>{
+    const open = el('lastHeardBody').classList.contains('hidden');   // currently hidden → we're opening it
+    setLastHeardOpen(open);
+    localStorage.setItem('lastHeardOpen', open?'1':'0');
+  });
+  renderLastHeard();
+}
+
 // ---- ticker: countdown timers + slot pill elapsed ----
 setInterval(()=>{
   const now = Date.now();
@@ -329,6 +422,9 @@ setInterval(()=>{
   document.querySelectorAll('.js-since').forEach(s=>{
     s.textContent = dur((+s.dataset.base) + (now - (+s.dataset.arr))/1000);
   });
+  document.querySelectorAll('.js-lh').forEach(s=>{
+    s.textContent = dur(now/1000 - (+s.dataset.t)) + ' ago';
+  });
 }, 1000);
 
 // ---- websocket ----
@@ -338,7 +434,7 @@ function setConn(up){
   c.className = 'badge '+(up?'up':'down');
   c.textContent = 'DMRlink3: '+(up?'connected':'disconnected');
 }
-function renderAll(){ renderSystems(); renderBridges(); renderLog(); }
+function renderAll(){ renderSystems(); renderBridges(); renderLog(); renderLastHeard(); }
 
 function applyBridgeEvent(data){
   data._arrived = data._arrived || (Date.now()/1000);
@@ -362,6 +458,7 @@ function applyBridgeEvent(data){
   if(ST.log.length > 400) ST.log.pop();
   renderSystems();
   renderLog();
+  renderLastHeard();
 }
 
 let sock = null;
@@ -513,6 +610,8 @@ if(new URLSearchParams(location.search).has('demo')){
 } else {
   connect();
 }
+initLastHeard();
+initSystemsCollapse();
 </script>
 </body>
 </html>
