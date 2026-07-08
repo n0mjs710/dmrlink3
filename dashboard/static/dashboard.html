@@ -68,7 +68,7 @@
   .toggle-btn{cursor:pointer;user-select:none;display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:var(--accent);background:var(--panel2);border:1px solid var(--border);border-radius:6px;padding:3px 10px;text-transform:none;letter-spacing:0}
   .toggle-btn:hover{border-color:var(--accent)}
   .toggle-btn .caret{font-size:11px;line-height:1}
-  #lastHeardBody.hidden{display:none}
+  .sec-body.hidden{display:none}
   .peers-hdr .toggle-btn .sub{font-weight:400}
   .sys-block.collapsed .sys-table,.sys-block.collapsed .empty{display:none}
 </style>
@@ -83,10 +83,10 @@
     <div id="conn" class="badge down">DMRlink3: connecting…</div>
   </header>
 
-  <section id="lastHeardSection"><h2 class="lh-head">Last Heard <span id="lastHeardToggle" class="toggle-btn"><span class="caret">▾</span><span class="toggle-label">Hide</span></span></h2><div id="lastHeardBody"><div id="lastHeard"></div></div></section>
-  <section><h2>Systems</h2><div id="systems"></div></section>
-  <section><h2>Conference Bridges</h2><div id="bridges"></div></section>
-  <section><h2>Call Log</h2><div id="log"></div></section>
+  <section id="lastHeardSection"><h2 class="lh-head"><span id="lastHeardTitle">Last Heard</span> <span id="lastHeardToggle" class="toggle-btn"><span class="caret">▾</span><span class="toggle-label">Active only</span></span></h2><div id="lastHeardBody"><div id="lastHeard"></div></div></section>
+  <section id="systemsSection"><h2 class="lh-head">Systems <span id="systemsToggle" class="toggle-btn"><span class="caret">▾</span><span class="toggle-label">Hide</span></span></h2><div id="systemsBody" class="sec-body"><div id="systems"></div></div></section>
+  <section id="bridgesSection"><h2 class="lh-head">Conference Bridges <span id="bridgesToggle" class="toggle-btn"><span class="caret">▾</span><span class="toggle-label">Hide</span></span></h2><div id="bridgesBody" class="sec-body"><div id="bridges"></div></div></section>
+  <section id="logSection"><h2 class="lh-head">Call Log <span id="logToggle" class="toggle-btn"><span class="caret">▾</span><span class="toggle-label">Hide</span></span></h2><div id="logBody" class="sec-body"><div id="log"></div></div></section>
 </div>
 
 <script>
@@ -366,10 +366,11 @@ function renderLastHeard(){
     if((e.event||'').includes('TX')) continue;   // skip retransmit legs; keep true originators
     const id = e.src==null ? '' : String(e.src);
     if(!id || seen[id]) continue;
+    if(lastHeardCollapsed && !lhActiveSrc(e.src)) continue;   // "Active Calls" view: live streams only
     seen[id] = 1; rows.push(e);
     if(rows.length >= LAST_HEARD_COUNT) break;
   }
-  if(!rows.length){ box.innerHTML = '<div class="empty">No calls heard yet</div>'; return; }
+  if(!rows.length){ box.innerHTML = '<div class="empty">'+(lastHeardCollapsed?'No active calls':'No calls heard yet')+'</div>'; return; }
   let h = '<table><tr><th>User</th><th>Type</th><th>Source</th><th>TS</th><th>Talkgroup</th><th>When</th></tr>';
   for(const e of rows){
     const t = e._arrived||0;                     // seconds
@@ -385,23 +386,44 @@ function renderLastHeard(){
   }
   box.innerHTML = h+'</table>';
 }
-function setLastHeardOpen(open){
-  el('lastHeardBody').classList.toggle('hidden', !open);
+// Collapsing Last Heard doesn't hide it — it filters to an "Active Calls" view
+// (live streams only) and retitles the header. Expanded shows the full list.
+let lastHeardCollapsed = false;
+function applyLastHeard(collapsed){
+  lastHeardCollapsed = collapsed;
+  el('lastHeardTitle').textContent = collapsed ? 'Active Calls' : 'Last Heard';
   const t = el('lastHeardToggle');
-  t.querySelector('.caret').textContent = open ? '▾' : '▸';
-  t.querySelector('.toggle-label').textContent = open ? 'Hide' : 'Show';
+  t.querySelector('.caret').textContent = collapsed ? '▸' : '▾';
+  t.querySelector('.toggle-label').textContent = collapsed ? 'Show all' : 'Active only';
+  renderLastHeard();
 }
 function initLastHeard(){
   const sec = el('lastHeardSection'); if(!sec) return;
   if(LAST_HEARD_CFG==='off'){ sec.style.display='none'; return; }
-  const saved = localStorage.getItem('lastHeardOpen');       // per-browser override wins over config default
-  setLastHeardOpen(saved==null ? (LAST_HEARD_CFG!=='closed') : (saved==='1'));
+  const saved = localStorage.getItem('lastHeardOpen');       // '1' = full list, '0' = active-only; else config default
+  applyLastHeard(saved==null ? (LAST_HEARD_CFG==='closed') : (saved==='0'));
   el('lastHeardToggle').addEventListener('click', ()=>{
-    const open = el('lastHeardBody').classList.contains('hidden');   // currently hidden → we're opening it
-    setLastHeardOpen(open);
-    localStorage.setItem('lastHeardOpen', open?'1':'0');
+    const collapsed = !lastHeardCollapsed;
+    applyLastHeard(collapsed);
+    localStorage.setItem('lastHeardOpen', collapsed?'0':'1');
   });
-  renderLastHeard();
+}
+// Simple collapsible sections (hide the body). Persisted per browser.
+function initCollapse(key, bodyId, toggleId, defCollapsed){
+  const body = el(bodyId), btn = el(toggleId);
+  if(!body || !btn) return;
+  const apply = c => {
+    body.classList.toggle('hidden', c);
+    btn.querySelector('.caret').textContent = c ? '▸' : '▾';
+    btn.querySelector('.toggle-label').textContent = c ? 'Show' : 'Hide';
+  };
+  const saved = localStorage.getItem('collapse:'+key);       // '1' = collapsed, '0' = shown; else default
+  apply(saved==null ? !!defCollapsed : saved==='1');
+  btn.addEventListener('click', ()=>{
+    const collapsed = !body.classList.contains('hidden');    // currently shown → we're collapsing
+    localStorage.setItem('collapse:'+key, collapsed?'1':'0');
+    apply(collapsed);
+  });
 }
 
 // ---- ticker: countdown timers + slot pill elapsed ----
@@ -612,6 +634,9 @@ if(new URLSearchParams(location.search).has('demo')){
 }
 initLastHeard();
 initSystemsCollapse();
+initCollapse('systems','systemsBody','systemsToggle', false);
+initCollapse('bridges','bridgesBody','bridgesToggle', false);
+initCollapse('log','logBody','logToggle', false);
 </script>
 </body>
 </html>
