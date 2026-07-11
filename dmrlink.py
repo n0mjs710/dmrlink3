@@ -19,6 +19,7 @@
 ###############################################################################
 
 import asyncio
+import socket
 import json
 import logging
 import signal
@@ -157,6 +158,32 @@ def _systems_snapshot(_systems):
     return result
 
 
+# Turn on TCP keepalive with aggressive timers so a silently-severed connection
+# (NIC/interface flap, DHCP renew, firewall/conntrack eviction, router reboot --
+# anything that drops the flow without a clean FIN/RST) is detected by the OS
+# within ~2 minutes instead of the default ~2 hours. The transport then errors,
+# which unblocks the read loop and sheds the client. Only meaningful for
+# non-loopback connections; harmless on loopback.
+def _enable_tcp_keepalive(_writer, _idle=60, _intvl=15, _cnt=4):
+    sock = _writer.get_extra_info('socket')
+    if sock is None:
+        return
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        if hasattr(socket, 'TCP_KEEPIDLE'):     # Linux
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, _idle)
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, _intvl)
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, _cnt)
+    except OSError as e:
+        logger.warning('(GLOBAL) Could not set TCP keepalive: %s', e)
+
+
+# Drop a client whose outbound buffer has grown past this, i.e. it is not
+# reading -- a stuck/dead peer we haven't detected yet. Bounds memory so one
+# wedged dashboard can't grow dmrlink3 without limit.
+_REPORT_WRITE_BUFFER_LIMIT = 1 << 20   # 1 MiB
+
+
 class ReportServer:
     """Async TCP server that pushes NDJSON events to connected dashboard clients."""
 
@@ -186,6 +213,7 @@ class ReportServer:
             writer.close()
             return
         logger.info('(GLOBAL) Reporting client connected: %s:%s', addr[0], addr[1])
+        _enable_tcp_keepalive(writer)
         self.clients.append(writer)
         self.send_config()   # push current state immediately; don't wait for the next periodic tick
         self.send_bridge()   # no-op in base class; BridgeReportServer overrides this
@@ -212,7 +240,21 @@ class ReportServer:
         data = (json.dumps(obj) + '\n').encode()
         dead = []
         for writer in self.clients:
+            # StreamWriter.write() buffers and almost never raises for a broken
+            # peer, so a dead connection is caught two other ways: is_closing()
+            # (set once the OS/keepalive has errored the transport) and an
+            # over-limit write buffer (the client has stopped reading).
+            if writer.is_closing():
+                dead.append(writer)
+                continue
             try:
+                transport = writer.transport
+                if transport is not None and \
+                        transport.get_write_buffer_size() > _REPORT_WRITE_BUFFER_LIMIT:
+                    logger.warning('(GLOBAL) Dropping unresponsive client %s (write buffer over limit)',
+                                   writer.get_extra_info('peername'))
+                    dead.append(writer)
+                    continue
                 writer.write(data)
             except Exception as e:
                 logger.warning('(GLOBAL) Reporting write error: %s', e)
@@ -220,6 +262,10 @@ class ReportServer:
         for w in dead:
             if w in self.clients:
                 self.clients.remove(w)
+            try:
+                w.close()
+            except Exception:
+                pass
 
     def send_config(self):
         self._send_json({'type': 'config', 'systems': _systems_snapshot(self._config['SYSTEMS'])})
