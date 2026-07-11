@@ -268,7 +268,12 @@ class ReportServer:
                 pass
 
     def send_config(self):
-        self._send_json({'type': 'config', 'systems': _systems_snapshot(self._config['SYSTEMS'])})
+        # Advertise the push interval so the dashboard can size its "link dead"
+        # read timeout relative to how often we actually send (this config push
+        # is the de-facto heartbeat).
+        self._send_json({'type': 'config',
+                         'systems': _systems_snapshot(self._config['SYSTEMS']),
+                         'report_interval': self._config['REPORTS']['REPORT_INTERVAL']})
 
     def send_bridge(self):
         pass  # Overridden by BridgeReportServer in bridge.py
