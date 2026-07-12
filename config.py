@@ -134,6 +134,12 @@ def build_config(_config_file):
                     'PATH':    config.get(section, 'PATH'),
                     'USE_ACL': config.get(section, 'USE_ACL'),
                     'SUB_ACL': config.get(section, 'SUB_ACL'),
+                    # Per-peer keepalive-loss quality metric (dashboard PING_LOSS):
+                    # window is the sliding span it is measured over (minutes,
+                    # clamped 1..60); warn is the % at/above which the dashboard
+                    # flags the peer/master gold. Optional -- default if absent.
+                    'PING_LOSS_WINDOW': config.getint(section, 'PING_LOSS_WINDOW', fallback=5),
+                    'PING_LOSS_WARN':   config.getint(section, 'PING_LOSS_WARN', fallback=5),
                 })
 
             elif section == 'REPORTS':

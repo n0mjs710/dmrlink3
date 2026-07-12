@@ -26,6 +26,7 @@ import signal
 
 from binascii import b2a_hex as ahex
 from binascii import a2b_hex as bhex
+from collections import deque
 from hashlib import sha1
 from hmac import new as hmac_new, compare_digest
 from socket import inet_ntoa as IPAddr
@@ -96,6 +97,26 @@ async def run_periodic(_interval, _func, _name, *_args):
 # Reporting server (NDJSON over TCP, replaces pickle/Netstring)
 # ---------------------------------------------------------------------------
 
+def _peer_snapshot(_pid, _p):
+    """JSON-serializable view of one IPSC peer. Shared by the full-state snapshot
+    and the granular send_peer delta (so both carry an identical shape, incl. the
+    PING_LOSS quality figure)."""
+    st = _p['STATUS']
+    return {
+        'RADIO_ID':                int_id(_pid),
+        'IP':                      _p['IP'],
+        'PORT':                    _p['PORT'],
+        'CONNECTED':               st['CONNECTED'],
+        'CONNECT_TIME':            st['CONNECT_TIME'],
+        'KEEP_ALIVES_SENT':        st['KEEP_ALIVES_SENT'],
+        'KEEP_ALIVES_RECEIVED':    st['KEEP_ALIVES_RECEIVED'],
+        'KEEP_ALIVES_OUTSTANDING': st['KEEP_ALIVES_OUTSTANDING'],
+        'KEEP_ALIVES_MISSED':      st['KEEP_ALIVES_MISSED'],
+        'KEEP_ALIVE_RX_TIME':      st['KEEP_ALIVE_RX_TIME'],
+        'PING_LOSS':               st.get('PING_LOSS', 0),
+    }
+
+
 def _systems_snapshot(_systems):
     """Produce a JSON-serializable view of the live SYSTEMS dict."""
     result = {}
@@ -138,20 +159,10 @@ def _systems_snapshot(_systems):
                 'KEEP_ALIVES_RECEIVED':   master['STATUS']['KEEP_ALIVES_RECEIVED'],
                 'KEEP_ALIVES_OUTSTANDING':master['STATUS']['KEEP_ALIVES_OUTSTANDING'],
                 'KEEP_ALIVES_MISSED':     master['STATUS']['KEEP_ALIVES_MISSED'],
+                'PING_LOSS':              master['STATUS'].get('PING_LOSS', 0),
             },
             'PEERS': {
-                str(int_id(pid)): {
-                    'RADIO_ID':                int_id(pid),
-                    'IP':                      p['IP'],
-                    'PORT':                    p['PORT'],
-                    'CONNECTED':               p['STATUS']['CONNECTED'],
-                    'CONNECT_TIME':            p['STATUS']['CONNECT_TIME'],
-                    'KEEP_ALIVES_SENT':        p['STATUS']['KEEP_ALIVES_SENT'],
-                    'KEEP_ALIVES_RECEIVED':    p['STATUS']['KEEP_ALIVES_RECEIVED'],
-                    'KEEP_ALIVES_OUTSTANDING': p['STATUS']['KEEP_ALIVES_OUTSTANDING'],
-                    'KEEP_ALIVES_MISSED':      p['STATUS']['KEEP_ALIVES_MISSED'],
-                    'KEEP_ALIVE_RX_TIME':      p['STATUS']['KEEP_ALIVE_RX_TIME'],
-                }
+                str(int_id(pid)): _peer_snapshot(pid, p)
                 for pid, p in peers.items()
             },
         }
@@ -182,6 +193,13 @@ def _enable_tcp_keepalive(_writer, _idle=60, _intvl=15, _cnt=4):
 # reading -- a stuck/dead peer we haven't detected yet. Bounds memory so one
 # wedged dashboard can't grow dmrlink3 without limit.
 _REPORT_WRITE_BUFFER_LIMIT = 1 << 20   # 1 MiB
+
+# Real peer/bridge state changes now travel as granular delta events (send_peer,
+# send_bridge), so the full config+bridge snapshot no longer needs to go out every
+# REPORT_INTERVAL. periodic_push re-pushes the full state only this often (a
+# reconciliation safety net); the other ticks send a tiny heartbeat so the
+# dashboard's link-liveness read timeout stays fed. Mirrors hblink3.
+REPORT_RESYNC_SECONDS = 60
 
 
 class ReportServer:
@@ -270,9 +288,11 @@ class ReportServer:
     def send_config(self):
         # Advertise the push interval so the dashboard can size its "link dead"
         # read timeout relative to how often we actually send (this config push
-        # is the de-facto heartbeat).
+        # is the de-facto heartbeat / slow resync).
         self._send_json({'type': 'config',
                          'systems': _systems_snapshot(self._config['SYSTEMS']),
+                         # Dashboard flags a peer/master gold at/above this ping-loss %.
+                         'ping_loss_warn': self._config['GLOBAL'].get('PING_LOSS_WARN', 5),
                          'report_interval': self._config['REPORTS']['REPORT_INTERVAL']})
 
     def send_bridge(self):
@@ -281,8 +301,38 @@ class ReportServer:
     def send_bridge_event(self, _event):
         pass  # Overridden by BridgeReportServer in bridge.py
 
+    # Granular peer lifecycle delta (an IPSC peer registering or dropping) so the
+    # dashboard reflects membership changes immediately instead of waiting for the
+    # next slow resync. _info is a per-peer snapshot view on 'connected', omitted
+    # on 'disconnected'. Mirrors hblink3's send_peer.
+    def send_peer(self, _system, _radio_id, _action, _info=None):
+        evt = {'type': 'peer', 'system': _system, 'radio_id': _radio_id, 'action': _action}
+        if _info is not None:
+            evt['info'] = _info
+        self._send_json(evt)
+
     def send_rcm(self, _data):
         pass  # RCM monitoring not forwarded in dmrlink3
+
+    # True on the periodic ticks where a full state resync is due (a reconciliation
+    # safety net, ~REPORT_RESYNC_SECONDS apart); on the other ticks send only a
+    # tiny heartbeat so the dashboard's link-liveness timeout stays fed without
+    # re-pushing full state. Real state changes travel as granular events.
+    def _resync_due(self):
+        self._resync_tick = getattr(self, '_resync_tick', -1) + 1
+        interval = max(1, self._config['REPORTS'].get('REPORT_INTERVAL', 10))
+        every = max(1, round(REPORT_RESYNC_SECONDS / interval))
+        if self._resync_tick % every == 0:
+            return True
+        self._send_json({'type': 'ping'})
+        return False
+
+    def periodic_push(self):
+        # Full config+bridge only on the resync tick; heartbeat otherwise.
+        # send_bridge is a no-op in the base class (overridden by BridgeReportServer).
+        if self._resync_due():
+            self.send_config()
+            self.send_bridge()
 
 
 # ---------------------------------------------------------------------------
@@ -304,8 +354,7 @@ def config_reports(_config, _factory):
     elif _config['REPORTS']['REPORT_NETWORKS'] == 'NETWORK':
         def reporting_loop(_server):
             logger.debug('(GLOBAL) Periodic reporting loop (NETWORK)')
-            _server.send_config()
-            _server.send_bridge()
+            _server.periodic_push()
         report_server = _factory(_config)
         loop.create_task(report_server.start(_config['REPORTS']['REPORT_PORT']))
         loop.create_task(run_periodic(_config['REPORTS']['REPORT_INTERVAL'],
@@ -511,6 +560,14 @@ class IPSC(asyncio.DatagramProtocol):
         self._master_stat = self._master['STATUS']
         self._master_sock = (self._master['IP'], self._master['PORT'])
         self._peers       = self._config['PEERS']
+
+        # Dashboard-reporting state (mirrors hblink3):
+        #   _reported_peers -- radio_ids last reported 'connected' via send_peer,
+        #     so the maintenance-loop reconciliation sweep emits deltas only on change.
+        #   _ping_q -- radio_id -> {'ev': deque[(ts, missed)], 'base': float, 'warm': list}
+        #     sliding window of keepalive observations feeding the PING_LOSS metric.
+        self._reported_peers = set()
+        self._ping_q = {}
 
         self.TS_FLAGS = self._local['MODE'] + self._local['FLAGS']
 
@@ -812,6 +869,7 @@ class IPSC(asyncio.DatagramProtocol):
                         'KEEP_ALIVES_OUTSTANDING': 0,
                         'KEEP_ALIVES_RECEIVED':    0,
                         'KEEP_ALIVE_RX_TIME':      0,
+                        'PING_LOSS':               0,
                     },
                 }
                 logger.debug('(%s) Peer Added: %s', self._system, int_id(_hex_radio_id))
@@ -918,6 +976,7 @@ class IPSC(asyncio.DatagramProtocol):
         self.reset_keep_alive(_peerid)
         self._peers[_peerid]['STATUS']['KEEP_ALIVES_RECEIVED'] += 1
         self._peers[_peerid]['STATUS']['KEEP_ALIVE_RX_TIME']   = int(time())
+        self._note_keepalive(_peerid)   # PEER mode: this peer's reply to our keepalive
         logger.debug('(%s) Keep-Alive Reply received from Peer %s',
                      self._system, int_id(_peerid))
 
@@ -933,6 +992,7 @@ class IPSC(asyncio.DatagramProtocol):
         self.reset_keep_alive(_peerid)
         self._master['STATUS']['KEEP_ALIVES_RECEIVED'] += 1
         self._master['STATUS']['KEEP_ALIVE_RX_TIME']   = int(time())
+        self._note_keepalive(_peerid)   # PEER mode: master's reply to our keepalive
         logger.debug('(%s) Keep-Alive Reply received from Master %s',
                      self._system, int_id(_peerid))
 
@@ -990,6 +1050,7 @@ class IPSC(asyncio.DatagramProtocol):
                     'KEEP_ALIVES_OUTSTANDING': 0,
                     'KEEP_ALIVES_RECEIVED':    0,
                     'KEEP_ALIVE_RX_TIME':      int(time()),
+                    'PING_LOSS':               0,
                 },
             }
         else:
@@ -1023,6 +1084,7 @@ class IPSC(asyncio.DatagramProtocol):
         if _peerid in self._peers:
             self._peers[_peerid]['STATUS']['KEEP_ALIVES_RECEIVED'] += 1
             self._peers[_peerid]['STATUS']['KEEP_ALIVE_RX_TIME']   = int(time())
+            self._note_keepalive(_peerid)   # MASTER mode: this peer's keepalive to us
             self.send_packet(self.MASTER_ALIVE_REPLY_PKT, (_host, _port))
             logger.debug('(%s) Master Keep-Alive Request from peer %s, %s:%s',
                          self._system, int_id(_peerid), _host, _port)
@@ -1037,6 +1099,88 @@ class IPSC(asyncio.DatagramProtocol):
         else:
             logger.warning('(%s) Peer List Request from *UNREGISTERED* peer %s',
                            self._system, int_id(_peerid))
+
+    # -----------------------------------------------------------------------
+    # Ping-loss quality metric (mirrors hblink3's per-repeater PING_LOSS).
+    # Detects a peer/master that STAYS CONNECTED but loses keepalives (lossy link
+    # -> choppy audio), which a simple up/down status never shows. hblink3 has to
+    # self-calibrate an unknown repeater ping cadence; IPSC's keepalive cadence is
+    # known -- ALIVE_TIMER -- so we use it directly as the expected interval. One
+    # uniform path serves BOTH roles: we note every keepalive-class packet OBSERVED
+    # from a radio and infer how many were lost in the gap since the previous one.
+    # MASTER mode observes peers' MASTER_ALIVE_REQs; PEER mode observes the master's
+    # / peers' *_ALIVE_REPLYs to our requests -- either way a lost keepalive widens
+    # the gap by (about) one interval. Window is a deque pruned to PING_LOSS_WINDOW
+    # minutes; loss% = missed / (received + missed).
+    # -----------------------------------------------------------------------
+    def _ping_loss_window_secs(self):
+        return min(60, max(1, self._CONFIG['GLOBAL'].get('PING_LOSS_WINDOW', 5))) * 60
+
+    def _prune_pings(self, _ev, _now):
+        cutoff = _now - self._ping_loss_window_secs()
+        while _ev and _ev[0][0] < cutoff:
+            _ev.popleft()
+
+    def _note_keepalive(self, _radio_id, _now=None):
+        now = time() if _now is None else _now
+        base = self._local['ALIVE_TIMER'] or 0
+        st = self._ping_q.get(_radio_id)
+        if st is None:
+            st = self._ping_q[_radio_id] = {'ev': deque(), 'last': 0.0}
+        gap = (now - st['last']) if st['last'] else 0.0
+        # Between base*1.5 (jitter guard) and the keepalive-timeout horizon, infer
+        # how many keepalives were lost in the gap. A gap beyond the horizon means
+        # the session lapsed (peer was down / re-registered) -- that is a disconnect,
+        # not a lossy link, so don't attribute the downtime as loss; start fresh.
+        horizon = base * (self._local.get('MAX_MISSED', 5) + 1)
+        if base > 0 and base * 1.5 < gap <= horizon:
+            missed = max(0, round(gap / base) - 1)
+        else:
+            missed = 0
+        st['ev'].append((now, missed))
+        st['last'] = now
+        self._prune_pings(st['ev'], now)
+
+    def _ping_loss_pct(self, _radio_id, _now):
+        st = self._ping_q.get(_radio_id)
+        if not st:
+            return 0
+        self._prune_pings(st['ev'], _now)
+        received = len(st['ev'])
+        missed = sum(m for _, m in st['ev'])
+        total = received + missed
+        return round(100.0 * missed / total) if total > 0 else 0
+
+    # Run once per maintenance sweep from either loop: refresh the PING_LOSS figure
+    # for each connected peer (and, in PEER mode, the master) so it rides the next
+    # snapshot / delta, prune dead radios' history, then emit granular peer
+    # connect/disconnect deltas for any change since the last sweep. The peer delta
+    # is a centralized reconciliation over self._peers -- it can't miss a scattered
+    # add/remove path and only emits on actual change (never a full-state flood).
+    # Mirrors hblink3.HBSYSTEM.report_peer_deltas. (The master link-state, a single
+    # well-known entity, rides the periodic snapshot rather than a delta.)
+    def report_maintenance(self):
+        now = time()
+        for pid, p in self._peers.items():
+            if p['STATUS']['CONNECTED']:
+                p['STATUS']['PING_LOSS'] = self._ping_loss_pct(pid, now)
+        if not self._local['MASTER_PEER']:
+            self._master_stat['PING_LOSS'] = (
+                self._ping_loss_pct(self._master['RADIO_ID'], now)
+                if self._master_stat['CONNECTED'] else 0)
+        for rid in list(self._ping_q):
+            self._prune_pings(self._ping_q[rid]['ev'], now)
+            if not self._ping_q[rid]['ev']:
+                del self._ping_q[rid]
+        if not self._report:
+            return
+        current = {pid for pid, p in self._peers.items() if p['STATUS']['CONNECTED']}
+        for pid in current - self._reported_peers:
+            self._report.send_peer(self._system, int_id(pid), 'connected',
+                                    _peer_snapshot(pid, self._peers[pid]))
+        for pid in self._reported_peers - current:
+            self._report.send_peer(self._system, int_id(pid), 'disconnected')
+        self._reported_peers = current
 
     # -----------------------------------------------------------------------
     # Connection maintenance loops (run_periodic callbacks)
@@ -1054,6 +1198,7 @@ class IPSC(asyncio.DatagramProtocol):
                 self.send_to_ipsc(self.PEER_LIST_REPLY_PKT + build_peer_list(self._peers))
                 logger.warning('(%s) Timeout exceeded for Peer %s — de-registering',
                                self._system, int_id(peer))
+        self.report_maintenance()
 
     def peer_maintenance_loop(self):
         logger.debug('(%s) PEER Maintenance Loop', self._system)
@@ -1131,6 +1276,8 @@ class IPSC(asyncio.DatagramProtocol):
 
                     self._peers[peer]['STATUS']['KEEP_ALIVES_SENT']        += 1
                     self._peers[peer]['STATUS']['KEEP_ALIVES_OUTSTANDING'] += 1
+
+        self.report_maintenance()
 
 
 # ---------------------------------------------------------------------------

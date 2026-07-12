@@ -79,6 +79,7 @@ def make_system(radio_id_int, ip, port, master_peer=True,
             'PORT':         master_port if not master_peer else '',
             'STATUS': {
                 'CONNECTED':               False,
+                'CONNECT_TIME':            0,
                 'PEER_LIST':               False,
                 'KEEP_ALIVES_SENT':        0,
                 'KEEP_ALIVES_MISSED':      0,
@@ -161,11 +162,13 @@ def make_peer_entry(host='127.0.0.1', port=50200):
         'FLAGS_DECODE': {},
         'STATUS': {
             'CONNECTED':               True,
+            'CONNECT_TIME':            int(_time()),
             'KEEP_ALIVES_SENT':        0,
             'KEEP_ALIVES_MISSED':      0,
             'KEEP_ALIVES_OUTSTANDING': 0,
             'KEEP_ALIVES_RECEIVED':    0,
             'KEEP_ALIVE_RX_TIME':      int(_time()),
+            'PING_LOSS':               0,
         },
     }
 

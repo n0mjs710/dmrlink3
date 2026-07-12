@@ -260,5 +260,152 @@ class TestUnknownOpcodes(IPSCMasterBase):
         self.inject(pkt)
 
 
+# ---------------------------------------------------------------------------
+# Granular peer connect/disconnect reporting (dashboard delta events)
+# ---------------------------------------------------------------------------
+
+class _FakeReport:
+    """Captures send_peer() deltas emitted by the reconciliation sweep."""
+    def __init__(self):
+        self.peer_events = []
+
+    def send_peer(self, system, radio_id, action, info=None):
+        self.peer_events.append({'system': system, 'radio_id': radio_id,
+                                 'action': action, 'info': info})
+
+    def send_config(self):        pass
+    def send_bridge(self):        pass
+    def send_bridge_event(self, e): pass
+    def send_rcm(self, d):        pass
+
+
+class TestPeerEvents(unittest.TestCase):
+    """report_maintenance() emits a granular delta only when peer membership
+    actually changes -- the reconciliation-sweep contract mirrored from hblink3."""
+
+    SYSTEM_NAME = 'TEST-MASTER'
+
+    def setUp(self):
+        cfg = make_config({
+            self.SYSTEM_NAME: make_system(MASTER_ID, '127.0.0.1', 50100, master_peer=True),
+        })
+        self.report = _FakeReport()
+        self.proto = IPSC(self.SYSTEM_NAME, cfg, self.report)
+        self.proto.transport = MockDatagramTransport()
+
+    def register(self, peer_id_bytes, host='127.0.0.1', port=50200):
+        self.proto.datagram_received(make_reg_req(peer_id_bytes), (host, port))
+
+    def test_connect_emits_single_connected_delta(self):
+        self.register(PEER_A_ID_B)
+        self.proto.report_maintenance()
+        evts = self.report.peer_events
+        self.assertEqual(len(evts), 1)
+        self.assertEqual(evts[0]['action'], 'connected')
+        self.assertEqual(evts[0]['radio_id'], PEER_A_ID)
+        self.assertEqual(evts[0]['system'], self.SYSTEM_NAME)
+        self.assertIsNotNone(evts[0]['info'])          # connected carries a snapshot
+        self.assertEqual(evts[0]['info']['RADIO_ID'], PEER_A_ID)
+
+    def test_no_change_emits_nothing(self):
+        self.register(PEER_A_ID_B)
+        self.proto.report_maintenance()
+        self.report.peer_events.clear()
+        self.proto.report_maintenance()                 # nothing changed
+        self.assertEqual(self.report.peer_events, [])
+
+    def test_disconnect_emits_disconnected_delta_without_info(self):
+        self.register(PEER_A_ID_B)
+        self.proto.report_maintenance()
+        self.report.peer_events.clear()
+        # A de-registration (peer leaves) removes it from self._peers.
+        self.proto.datagram_received(make_dereg_req(PEER_A_ID_B), ('127.0.0.1', 50200))
+        self.proto.report_maintenance()
+        evts = self.report.peer_events
+        self.assertEqual(len(evts), 1)
+        self.assertEqual(evts[0]['action'], 'disconnected')
+        self.assertEqual(evts[0]['radio_id'], PEER_A_ID)
+        self.assertIsNone(evts[0]['info'])              # disconnected omits the snapshot
+
+    def test_two_peers_emit_two_connected_deltas(self):
+        self.register(PEER_A_ID_B)
+        self.register(PEER_B_ID_B, port=50201)
+        self.proto.report_maintenance()
+        actions = sorted((e['radio_id'], e['action']) for e in self.report.peer_events)
+        self.assertEqual(actions, [(PEER_A_ID, 'connected'), (PEER_B_ID, 'connected')])
+
+    def test_no_report_server_is_safe(self):
+        # Same sweep with reporting disabled (report=None) must not raise.
+        cfg = make_config({
+            self.SYSTEM_NAME: make_system(MASTER_ID, '127.0.0.1', 50100, master_peer=True),
+        })
+        proto = IPSC(self.SYSTEM_NAME, cfg, None)
+        proto.transport = MockDatagramTransport()
+        proto.datagram_received(make_reg_req(PEER_A_ID_B), ('127.0.0.1', 50200))
+        proto.report_maintenance()                      # must not raise
+
+
+# ---------------------------------------------------------------------------
+# Ping-loss quality metric (keepalive loss over a sliding window)
+# ---------------------------------------------------------------------------
+
+class TestPingLoss(unittest.TestCase):
+    """_note_keepalive/_ping_loss_pct infer keepalive loss from the gap between
+    observed keepalives vs the known ALIVE_TIMER cadence (5s in make_system)."""
+
+    def setUp(self):
+        cfg = make_config({
+            'S': make_system(MASTER_ID, '127.0.0.1', 50100, master_peer=True),
+        })
+        self.proto = IPSC('S', cfg, None)
+        self.proto.transport = MockDatagramTransport()
+        self.rid = PEER_A_ID_B
+
+    def feed(self, *times):
+        for t in times:
+            self.proto._note_keepalive(self.rid, _now=t)
+
+    def test_clean_cadence_is_zero_loss(self):
+        self.feed(0, 5, 10, 15, 20)                     # every 5s == ALIVE_TIMER
+        self.assertEqual(self.proto._ping_loss_pct(self.rid, 20), 0)
+
+    def test_first_observation_no_false_positive(self):
+        self.feed(1000)                                  # no prior -> gap 0 -> 0 missed
+        self.assertEqual(self.proto._ping_loss_pct(self.rid, 1000), 0)
+
+    def test_jitter_under_threshold_not_counted(self):
+        self.feed(0, 6)                                  # gap 6 < base*1.5 (7.5) -> not lossy
+        self.assertEqual(self.proto._ping_loss_pct(self.rid, 6), 0)
+
+    def test_gap_infers_missed_keepalives(self):
+        # 0,5 clean; then a 15s gap == two keepalives lost before the one at 20.
+        self.feed(0, 5, 20)
+        st = self.proto._ping_q[self.rid]
+        self.assertEqual([m for _, m in st['ev']], [0, 0, 2])
+        # received=3 events, missed=2 -> 2/(3+2) = 40%
+        self.assertEqual(self.proto._ping_loss_pct(self.rid, 20), 40)
+
+    def test_window_prunes_old_loss(self):
+        # PING_LOSS_WINDOW defaults to 5 min (300s). Loss at t~20 ages out by t~400.
+        self.feed(0, 5, 20)
+        self.assertGreater(self.proto._ping_loss_pct(self.rid, 20), 0)
+        self.feed(400, 405, 410)                         # fresh clean pings well past the window
+        self.assertEqual(self.proto._ping_loss_pct(self.rid, 410), 0)
+
+    def test_report_maintenance_sets_ping_loss_on_connected_peer(self):
+        cfg = make_config({'S': make_system(MASTER_ID, '127.0.0.1', 50100, master_peer=True)})
+        proto = IPSC('S', cfg, None)
+        proto.transport = MockDatagramTransport()
+        proto.datagram_received(make_reg_req(PEER_A_ID_B), ('127.0.0.1', 50200))
+        # Inject a lossy keepalive history near wall-clock now, so it stays inside
+        # the window when report_maintenance() refreshes against real time().
+        now = time()
+        proto._note_keepalive(PEER_A_ID_B, _now=now - 15)  # first: no prior gap
+        proto._note_keepalive(PEER_A_ID_B, _now=now - 10)  # +5s clean
+        proto._note_keepalive(PEER_A_ID_B, _now=now)       # +10s gap -> 1 missed
+        proto.report_maintenance()
+        self.assertGreater(proto._peers[PEER_A_ID_B]['STATUS']['PING_LOSS'], 0)
+
+
 if __name__ == '__main__':
     unittest.main()

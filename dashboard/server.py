@@ -178,6 +178,7 @@ class State:
         self.log      = deque(maxlen=LOG_LINES)
         self.dmrlink  = False
         self.clients  = set()            # connected WebSockets
+        self.ping_loss_warn = 5          # PING_LOSS_WARN %: dashboard flags peer/master gold at/above this
 
 STATE = State()
 
@@ -231,8 +232,30 @@ async def handle_event(evt):
         interval = evt.get('report_interval')
         if interval:
             FEED_READ_TIMEOUT = max(float(interval) * 3, 30.0)
+        STATE.ping_loss_warn = evt.get('ping_loss_warn', STATE.ping_loss_warn)
         STATE.systems = enrich_systems(evt.get('systems', {}))
-        await broadcast({'type': 'config', 'systems': STATE.systems})
+        await broadcast({'type': 'config', 'systems': STATE.systems,
+                         'ping_loss_warn': STATE.ping_loss_warn})
+
+    elif t == 'peer':
+        # Granular IPSC peer connect/disconnect delta. Apply it to the in-memory
+        # systems view and re-broadcast the (enriched) config so the browser
+        # renders it without waiting for the next slow resync. Ignored if the
+        # system isn't known yet -- the on-connect snapshot will carry it.
+        sysview = STATE.systems.get(evt.get('system'))
+        if sysview is not None:
+            peers = sysview.setdefault('PEERS', {})
+            rid = str(evt.get('radio_id'))
+            if evt.get('action') == 'connected' and evt.get('info') is not None:
+                peers[rid] = evt['info']
+            elif evt.get('action') == 'disconnected':
+                peers.pop(rid, None)
+            STATE.systems = enrich_systems(STATE.systems)
+            await broadcast({'type': 'config', 'systems': STATE.systems,
+                             'ping_loss_warn': STATE.ping_loss_warn})
+
+    elif t == 'ping':
+        pass   # liveness heartbeat; receiving it already reset the feed read timeout
 
     elif t == 'bridge':
         STATE.bridges = enrich_bridges(evt.get('bridges', {}))
@@ -380,6 +403,7 @@ def current_state():
         'bridges':     STATE.bridges,
         'active':      list(STATE.active.values()),
         'log':         list(STATE.log),
+        'ping_loss_warn': STATE.ping_loss_warn,
     }
 
 @app.websocket('/ws')
