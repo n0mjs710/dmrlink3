@@ -50,6 +50,17 @@ try:
 except ImportError:
     sys.exit('No config.py found — copy config_sample.py to config.py and edit it.')
 
+# Feed transport: 'tcp' (default, connect to DMRLINK_IP:DMRLINK_PORT) or 'unix'
+# (connect to the daemon's local Unix socket DMRLINK_SOCKET). Optional in config.
+try:
+    from config import DMRLINK_TRANSPORT
+except ImportError:
+    DMRLINK_TRANSPORT = 'tcp'
+try:
+    from config import DMRLINK_SOCKET
+except ImportError:
+    DMRLINK_SOCKET = ''
+
 try:
     from config import TRY_DOWNLOAD, PEER_URL, SUBSCRIBER_URL, STALE_DAYS
 except ImportError:
@@ -237,7 +248,7 @@ async def handle_event(evt):
         await broadcast({'type': 'config', 'systems': STATE.systems,
                          'ping_loss_warn': STATE.ping_loss_warn})
 
-    elif t == 'peer':
+    elif t in ('peer_connected', 'peer_disconnected'):
         # Granular IPSC peer connect/disconnect delta. Apply it to the in-memory
         # systems view and re-broadcast the (enriched) config so the browser
         # renders it without waiting for the next slow resync. Ignored if the
@@ -246,9 +257,9 @@ async def handle_event(evt):
         if sysview is not None:
             peers = sysview.setdefault('PEERS', {})
             rid = str(evt.get('radio_id'))
-            if evt.get('action') == 'connected' and evt.get('info') is not None:
+            if t == 'peer_connected' and evt.get('info') is not None:
                 peers[rid] = evt['info']
-            elif evt.get('action') == 'disconnected':
+            elif t == 'peer_disconnected':
                 peers.pop(rid, None)
             STATE.systems = enrich_systems(STATE.systems)
             await broadcast({'type': 'config', 'systems': STATE.systems,
@@ -311,9 +322,13 @@ async def dmrlink_feed():
     while True:
         writer = None
         try:
-            reader, writer = await asyncio.open_connection(DMRLINK_IP, DMRLINK_PORT)
-            _enable_tcp_keepalive(writer)
-            logger.info('connected to dmrlink3 feed at %s:%s', DMRLINK_IP, DMRLINK_PORT)
+            if DMRLINK_TRANSPORT == 'unix':
+                reader, writer = await asyncio.open_unix_connection(DMRLINK_SOCKET)
+                logger.info('connected to dmrlink3 feed at unix socket %s', DMRLINK_SOCKET)
+            else:
+                reader, writer = await asyncio.open_connection(DMRLINK_IP, DMRLINK_PORT)
+                _enable_tcp_keepalive(writer)
+                logger.info('connected to dmrlink3 feed at %s:%s', DMRLINK_IP, DMRLINK_PORT)
             STATE.dmrlink = True
             await broadcast({'type': 'dmrlink', 'connected': True})
             while True:

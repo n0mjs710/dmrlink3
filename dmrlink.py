@@ -23,6 +23,7 @@ import socket
 import json
 import logging
 import signal
+import os
 
 from binascii import b2a_hex as ahex
 from binascii import a2b_hex as bhex
@@ -209,29 +210,51 @@ class ReportServer:
         self._config = _config
         self.clients = []   # list of asyncio.StreamWriter
 
-    async def start(self, port):
-        allowed = self._config['REPORTS']['REPORT_CLIENTS']
+    async def start(self):
+        # Transport is TCP by default (dashboards commonly run on a separate host).
+        # REPORT_TRANSPORT=unix binds a local Unix-domain socket instead -- a
+        # same-box dashboard that can't NIC-flap or be conntrack-evicted, retiring
+        # the whole silent-severance class. Mirrors hblink3/hblink4's selector.
+        reports = self._config['REPORTS']
+        transport = reports.get('REPORT_TRANSPORT', 'tcp')
+        allowed = reports['REPORT_CLIENTS']
         try:
-            server = await asyncio.start_server(
-                lambda r, w: self._client_connected(r, w, allowed),
-                host='0.0.0.0',
-                port=port,
-            )
+            if transport == 'unix':
+                path = reports.get('REPORT_SOCKET', '')
+                # Remove a stale socket file left by an unclean exit before binding.
+                if path and os.path.exists(path):
+                    try:
+                        os.unlink(path)
+                    except OSError:
+                        pass
+                server = await asyncio.start_unix_server(
+                    lambda r, w: self._client_connected(r, w, allowed, unix=True), path=path)
+                logger.info('(GLOBAL) DMRlink3 reporting server listening on unix socket %s', path)
+            else:
+                server = await asyncio.start_server(
+                    lambda r, w: self._client_connected(r, w, allowed, unix=False),
+                    host='0.0.0.0', port=reports['REPORT_PORT'])
+                logger.info('(GLOBAL) DMRlink3 reporting server listening on port %s', reports['REPORT_PORT'])
         except OSError as e:
-            logger.error('(GLOBAL) Reporting server could not bind port %s: %s', port, e)
+            logger.error('(GLOBAL) Reporting server could not bind (%s): %s', transport, e)
             return
-        logger.info('(GLOBAL) DMRlink3 reporting server listening on port %s', port)
         async with server:
             await server.serve_forever()
 
-    async def _client_connected(self, reader, writer, allowed):
-        addr = writer.get_extra_info('peername')
-        if '*' not in allowed and addr[0] not in allowed:
-            logger.warning('(GLOBAL) Reporting connection rejected from %s', addr[0])
-            writer.close()
-            return
-        logger.info('(GLOBAL) Reporting client connected: %s:%s', addr[0], addr[1])
-        _enable_tcp_keepalive(writer)
+    async def _client_connected(self, reader, writer, allowed, unix=False):
+        if unix:
+            # Filesystem permissions govern a Unix socket -- no IP ACL, and a local
+            # socket can't silently sever so TCP keepalive is moot.
+            peer = 'unix'
+        else:
+            addr = writer.get_extra_info('peername')
+            if '*' not in allowed and addr[0] not in allowed:
+                logger.warning('(GLOBAL) Reporting connection rejected from %s', addr[0])
+                writer.close()
+                return
+            peer = '%s:%s' % (addr[0], addr[1])
+            _enable_tcp_keepalive(writer)
+        logger.info('(GLOBAL) Reporting client connected: %s', peer)
         self.clients.append(writer)
         self.send_config()   # push current state immediately; don't wait for the next periodic tick
         self.send_bridge()   # no-op in base class; BridgeReportServer overrides this
@@ -252,7 +275,7 @@ class ReportServer:
                 await writer.wait_closed()
             except Exception:
                 pass
-            logger.info('(GLOBAL) Reporting client disconnected: %s:%s', addr[0], addr[1])
+            logger.info('(GLOBAL) Reporting client disconnected: %s', peer)
 
     def _send_json(self, obj):
         data = (json.dumps(obj) + '\n').encode()
@@ -306,7 +329,9 @@ class ReportServer:
     # next slow resync. _info is a per-peer snapshot view on 'connected', omitted
     # on 'disconnected'. Mirrors hblink3's send_peer.
     def send_peer(self, _system, _radio_id, _action, _info=None):
-        evt = {'type': 'peer', 'system': _system, 'radio_id': _radio_id, 'action': _action}
+        # Canonical vocabulary: 'peer_connected' / 'peer_disconnected' (the type
+        # carries the lifecycle; _action is 'connected'|'disconnected').
+        evt = {'type': 'peer_' + _action, 'system': _system, 'radio_id': _radio_id}
         if _info is not None:
             evt['info'] = _info
         self._send_json(evt)
@@ -356,11 +381,11 @@ def config_reports(_config, _factory):
             logger.debug('(GLOBAL) Periodic reporting loop (NETWORK)')
             _server.periodic_push()
         report_server = _factory(_config)
-        loop.create_task(report_server.start(_config['REPORTS']['REPORT_PORT']))
+        loop.create_task(report_server.start())
         loop.create_task(run_periodic(_config['REPORTS']['REPORT_INTERVAL'],
                                       reporting_loop, 'reporting', report_server))
-        logger.info('(GLOBAL) DMRlink3 TCP reporting server configured on port %s',
-                    _config['REPORTS']['REPORT_PORT'])
+        logger.info('(GLOBAL) DMRlink3 reporting server configured (%s)',
+                    _config['REPORTS'].get('REPORT_TRANSPORT', 'tcp'))
         return report_server
 
     else:

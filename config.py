@@ -149,6 +149,10 @@ def build_config(_config_file):
                     'REPORT_INTERVAL':     config.getint(section, 'REPORT_INTERVAL'),
                     'REPORT_PORT':         config.getint(section, 'REPORT_PORT'),
                     'REPORT_CLIENTS':      [c.strip() for c in config.get(section, 'REPORT_CLIENTS').split(',')],
+                    # Reporting transport: 'tcp' (default, dashboard may be remote)
+                    # or 'unix' (same-box dashboard via REPORT_SOCKET path). Optional.
+                    'REPORT_TRANSPORT':    config.get(section, 'REPORT_TRANSPORT', fallback='tcp').strip().lower(),
+                    'REPORT_SOCKET':       config.get(section, 'REPORT_SOCKET', fallback='').strip(),
                     'PRINT_PEERS_INC_MODE':  config.getboolean(section, 'PRINT_PEERS_INC_MODE'),
                     'PRINT_PEERS_INC_FLAGS': config.getboolean(section, 'PRINT_PEERS_INC_FLAGS'),
                 })
