@@ -49,7 +49,9 @@ cp dmrlink-SAMPLE.cfg dmrlink.cfg
 Edit `dmrlink.cfg` and fill in at minimum:
 
 - **[REPORTS]** — set `REPORT_NETWORKS: NETWORK`, `REPORT_PORT`, and
-  `REPORT_CLIENTS` if you will run the dashboard or any external monitoring.
+  `REPORT_CLIENTS` if you will run the dashboard or any external monitoring. For a
+  same-host dashboard, use `REPORT_TRANSPORT: unix` with a `REPORT_SOCKET` path
+  instead of a TCP port (immune to NIC flaps / conntrack eviction).
 - **[LOGGER]** — choose log handlers and level. Use `console-timed` for
   foreground testing; `file-timed` or `syslog` for production.
 - **System stanzas** — one `[SECTION]` block per IPSC network.
@@ -89,7 +91,10 @@ cp dashboard/config_sample.py dashboard/config.py
 
 Edit `dashboard/config.py`:
 
-- `DMRLINK_IP` / `DMRLINK_PORT` — point at dmrlink3's `REPORT_PORT`.
+- `DMRLINK_IP` / `DMRLINK_PORT` — point at dmrlink3's `REPORT_PORT` (TCP transport).
+- `DMRLINK_TRANSPORT` / `DMRLINK_SOCKET` — set to `'unix'` and the daemon's
+  `REPORT_SOCKET` path for a same-host feed over a Unix socket (must match the
+  daemon's `REPORT_TRANSPORT`); leave as `'tcp'` for a remote dashboard.
 - `WEB_PORT` — port the dashboard web server listens on (default `8080`).
 - `PATH` — directory containing alias files (`peer_ids.json`, etc.).
 - `LAST_HEARD` / `LAST_HEARD_COUNT` — default state (`'open'`/`'closed'`/`'off'`)

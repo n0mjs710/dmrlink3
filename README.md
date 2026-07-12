@@ -145,13 +145,23 @@ Enable reporting in `dmrlink.cfg`:
 ```ini
 [REPORTS]
 REPORT_NETWORKS: NETWORK
-REPORT_PORT: 4321
-REPORT_CLIENTS: 127.0.0.1
+REPORT_TRANSPORT: tcp          ; 'tcp' (default) or 'unix'
+REPORT_PORT: 4321              ; used when REPORT_TRANSPORT = tcp
+REPORT_SOCKET: /tmp/dmrlink3-report.sock   ; used when REPORT_TRANSPORT = unix
+REPORT_CLIENTS: 127.0.0.1      ; TCP only
 ```
 
+When the dashboard runs on the **same host**, set `REPORT_TRANSPORT: unix` (and a
+`REPORT_SOCKET` path) so the feed rides a local Unix-domain socket instead of TCP —
+a same-box socket can't be broken by a NIC flap or connection-tracking eviction.
+Set the dashboard's matching `DMRLINK_TRANSPORT`/`DMRLINK_SOCKET` to the same. Use
+`tcp` (the default) for a remote dashboard.
+
 The dashboard connects to this feed and serves a browser UI at the configured
-`WEB_PORT`. See `dashboard/config_sample.py` and [INSTALL.md](INSTALL.md) for
-setup instructions.
+`WEB_PORT`. It also shows a per-repeater **ping-loss** figure (golds a row whose
+keepalive-loss share crosses `PING_LOSS_WARN`), controlled by `PING_LOSS_WINDOW` /
+`PING_LOSS_WARN` in `[GLOBAL]`. See `dashboard/config_sample.py` and
+[INSTALL.md](INSTALL.md) for setup instructions.
 
 **Demo mode** — append `?demo` to the dashboard URL (e.g. `http://localhost:8080/?demo`)
 to load a static pre-populated scenario showing all visual elements: MASTER and PEER

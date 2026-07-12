@@ -14,8 +14,10 @@ REPORT_NAME     = 'My DMRlink3 System'  # Shown in the dashboard header
 LOGO_FILE       = ''                    # Path to a logo image (png/jpg/svg/gif); '' = no logo
 
 # Connection to dmrlink3's reporting feed ([REPORTS] in dmrlink.cfg)
-DMRLINK_IP      = '127.0.0.1'           # dmrlink3 reporting host
-DMRLINK_PORT    = 4321                  # dmrlink3 REPORT_PORT
+DMRLINK_TRANSPORT = 'tcp'               # 'tcp' (default) or 'unix'; must match the daemon's REPORT_TRANSPORT
+DMRLINK_IP      = '127.0.0.1'           # dmrlink3 reporting host (tcp transport)
+DMRLINK_PORT    = 4321                  # dmrlink3 REPORT_PORT (tcp transport)
+DMRLINK_SOCKET  = '/tmp/dmrlink3-report.sock'   # daemon's REPORT_SOCKET path (unix transport)
 
 # Web server
 WEB_HOST        = '0.0.0.0'             # Interface to bind the dashboard
